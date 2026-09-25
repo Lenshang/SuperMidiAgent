@@ -34,6 +34,13 @@ export type MidiOperation =
       curve?: 'linear' | 'smooth' | 'step';
       trackIndex?: number;
     }
+  | {
+      type: 'set_pitch_bend';
+      points: { bar: number; beat?: number; semitones: number }[];
+      curve?: 'linear' | 'smooth' | 'step';
+      rangeSemitones?: number; // 音源的实际弯音范围，默认 ±2
+      trackIndex?: number;
+    }
   | { type: 'add_sustain'; trackIndex?: number; gapBeats?: number }
   | { type: 'quantize'; trackIndex?: number; grid?: number; strength?: number }
   | { type: 'scale_velocity'; factor: number; trackIndex?: number }
@@ -112,6 +119,10 @@ function applyOne(doc: MidiDocument, op: MidiOperation): OperationResult {
 
     case 'set_cc_curve': {
       return applySetCcCurve(doc, op);
+    }
+
+    case 'set_pitch_bend': {
+      return applySetPitchBend(doc, op);
     }
 
     case 'add_sustain': {
@@ -242,6 +253,71 @@ function sampleCurve(
     }
   }
   return last.value;
+}
+
+/** 精确绘制 Pitch Bend 曲线：控制点以半音表示（相对音源弯音范围），换算为 14 位弯音值（8192 为中心）。 */
+function applySetPitchBend(
+  doc: MidiDocument,
+  op: Extract<MidiOperation, { type: 'set_pitch_bend' }>,
+): OperationResult {
+  const out = cloneDocument(doc);
+  const tpq = doc.ticksPerQuarter;
+  const sigMap = buildSigMap(collectSigs(doc));
+  const range = Math.max(0.5, op.rangeSemitones ?? 2);
+
+  const toValue = (semitones: number): number => {
+    const s = Math.max(-range, Math.min(range, semitones));
+    // 14 位弯音：中心 8192，范围 -8192 ~ +8191（满下弯 = 0，满上弯 = 16383）
+    return Math.max(0, Math.min(16383, Math.round(8192 + (s / range) * 8192)));
+  };
+
+  const pts = op.points
+    .map((p) => ({
+      tick: barToTick(Math.max(1, Math.floor(p.bar)), tpq, sigMap) + Math.round((p.beat ?? 0) * tpq),
+      value: toValue(p.semitones),
+    }))
+    .sort((a, b) => a.tick - b.tick);
+  if (pts.length === 0) return { doc: out, summary: 'set_pitch_bend 无控制点，已忽略' };
+  const dedup: { tick: number; value: number }[] = [];
+  for (const p of pts) {
+    if (dedup.length > 0 && dedup[dedup.length - 1].tick === p.tick) dedup[dedup.length - 1] = p;
+    else dedup.push(p);
+  }
+
+  const curve = op.curve ?? 'linear';
+  const endTick = Math.max(documentEndTick(doc), dedup[dedup.length - 1].tick, 1);
+  const grid = Math.max(15, Math.round(tpq / 8));
+  const samples: { tick: number; value: number }[] = [];
+  for (let tick = 0; tick < endTick; tick += grid) {
+    samples.push({ tick, value: sampleCurve(dedup, tick, curve) });
+  }
+  samples.push({ tick: endTick, value: sampleCurve(dedup, endTick, curve) });
+
+  let trackCount = 0;
+  let eventCount = 0;
+  let minV = 16383;
+  let maxV = 0;
+  out.tracks.forEach((t, ti) => {
+    if (op.trackIndex !== undefined && ti !== op.trackIndex) return;
+    if (t.notes.length === 0 || t.channel === 9) return; // 鼓组通道无弯音
+    t.pitchBends = samples.map((s) => ({
+      tick: s.tick,
+      value: Math.max(0, Math.min(16383, Math.round(s.value))),
+      channel: t.channel >= 0 ? t.channel : undefined,
+    }));
+    eventCount += t.pitchBends.length;
+    for (const b of t.pitchBends) {
+      minV = Math.min(minV, b.value);
+      maxV = Math.max(maxV, b.value);
+    }
+    sortInPlace(t);
+    trackCount++;
+  });
+  const toSemitones = (v: number): string => (((v - 8192) / 8191) * range).toFixed(2);
+  return {
+    doc: out,
+    summary: `绘制 Pitch Bend（${dedup.length} 个控制点、${curve} 插值，覆盖 ${trackCount} 条轨道 ${eventCount} 个事件，值域 ${toSemitones(minV)}~+${toSemitones(maxV)} 半音 / ±${range} 范围）`,
+  };
 }
 
 /** 精确绘制控制器曲线：给定 {bar, beat, value} 控制点，按插值方式铺满整个文档。 */

@@ -504,3 +504,92 @@ describe('统计信息', () => {
     expect(stats.tracks[1].controllerValues[11]).toEqual({ min: 30, max: 90, count: 2 });
   });
 });
+
+describe('Pitch Bend 绘制', () => {
+  function longPhraseDoc2(): ReturnType<typeof pianoDoc> {
+    const doc = pianoDoc();
+    for (let i = 0; i < 32; i++) {
+      doc.tracks[1].notes.push({ pitch: 60 + (i % 5) * 2, velocity: 85, startTick: i * 480, endTick: i * 480 + 430 });
+    }
+    return doc;
+  }
+
+  it('set_pitch_bend linear：半音换算为 14 位值（±2 范围）', () => {
+    const { doc: out, summary } = applyOperations(longPhraseDoc2(), [
+      {
+        type: 'set_pitch_bend',
+        curve: 'linear',
+        points: [
+          { bar: 1, semitones: -2 },
+          { bar: 5, semitones: 2 },
+        ],
+      },
+    ]);
+    const bends = out.tracks[1].pitchBends;
+    expect(bends.length).toBeGreaterThan(20);
+    // 4/4、480tpq：bar1 = tick 0 → 0（-2 半音），bar5 = tick 7680 → 16383（+2 半音），中点 3840 ≈ 8192
+    expect(bends.filter((b) => b.tick === 0).every((b) => b.value === 0)).toBe(true);
+    expect(bends.filter((b) => b.tick === 7680).every((b) => b.value === 16383)).toBe(true);
+    const atMid = bends.filter((b) => b.tick === 3840).map((b) => b.value);
+    expect(atMid[0]).toBeGreaterThanOrEqual(8100);
+    expect(atMid[0]).toBeLessThanOrEqual(8280);
+    expect(summary).toContain('Pitch Bend');
+    // round-trip：写盘再读回，弯音完整保留
+    const reparsed = parse(writeMidi(out));
+    const back = reparsed.tracks[1].pitchBends;
+    expect(back.length).toBe(bends.length);
+    expect(Math.min(...back.map((b) => b.value))).toBe(0);
+    expect(Math.max(...back.map((b) => b.value))).toBe(16383);
+  });
+
+  it('set_pitch_bend：超出音源范围的半音被钳制，替换旧弯音', () => {
+    const doc = longPhraseDoc2();
+    doc.tracks[1].pitchBends.push({ tick: 0, value: 8192 });
+    const { doc: out } = applyOperations(doc, [
+      {
+        type: 'set_pitch_bend',
+        curve: 'step',
+        rangeSemitones: 2,
+        points: [
+          { bar: 1, semitones: 5 }, // 超出 ±2 → 钳到 +2 = 16383
+          { bar: 3, semitones: 0 }, // 居中 8192
+        ],
+      },
+    ]);
+    const bends = out.tracks[1].pitchBends;
+    expect(bends.filter((b) => b.tick < 3840).every((b) => b.value === 16383)).toBe(true);
+    expect(bends.filter((b) => b.tick >= 3840).every((b) => b.value === 8192)).toBe(true);
+  });
+
+  it('set_pitch_bend 自定义范围与指定轨道', () => {
+    const doc = longPhraseDoc2();
+    doc.tracks.push(createEmptyTrack('Bass', 33));
+    doc.tracks[2].notes.push({ pitch: 40, velocity: 80, startTick: 0, endTick: 1920 * 8 });
+    const { doc: out } = applyOperations(doc, [
+      {
+        type: 'set_pitch_bend',
+        trackIndex: 2,
+        rangeSemitones: 12,
+        curve: 'linear',
+        points: [
+          { bar: 1, semitones: -12 },
+          { bar: 3, semitones: 12 },
+        ],
+      },
+    ]);
+    // 只作用于轨道 2
+    expect(out.tracks[1].pitchBends).toHaveLength(0);
+    expect(out.tracks[2].pitchBends.length).toBeGreaterThan(10);
+    // -12/12 半音在 ±12 范围内 → 满幅 0/16383
+    expect(out.tracks[2].pitchBends[0].value).toBe(0);
+    expect(out.tracks[2].pitchBends.filter((b) => b.tick === 3840).every((b) => b.value === 16383)).toBe(true);
+  });
+
+  it('analyzeStats 统计 Pitch Bend', () => {
+    const doc = longPhraseDoc2();
+    doc.tracks[1].pitchBends.push({ tick: 0, value: 7000 }, { tick: 480, value: 12000 });
+    const stats = analyzeStats(doc);
+    expect(stats.tracks[1].pitchBend).toEqual({ count: 2, min: 7000, max: 12000 });
+    expect(stats.tracks[0].pitchBend).toBeNull();
+  });
+});

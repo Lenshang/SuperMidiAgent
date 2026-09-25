@@ -83,6 +83,28 @@ const operationSchema: z.ZodType<MidiOperation> = z.discriminatedUnion('type', [
     trackIndex: z.number().int().optional().describe('缺省作用于所有音符轨道'),
   }),
   z.object({
+    type: z.literal('set_pitch_bend'),
+    points: z
+      .array(
+        z.object({
+          bar: z.number().int().min(1).describe('小节号（1 开始）'),
+          beat: z.number().min(0).max(16).optional().describe('小节内拍位置（0 = 小节头），默认 0'),
+          semitones: z.number().min(-24).max(24).describe('该点的弯音量（半音，负=下弯 正=上弯）；相对音源的弯音范围'),
+        }),
+      )
+      .min(2)
+      .max(64)
+      .describe('弯音控制点（至少 2 个），曲线覆盖整个文档：例如从 -2 扫到 +2 做上滑音'),
+    curve: z.enum(['linear', 'smooth', 'step']).optional().describe('插值：linear=直线（默认） smooth=平滑弧线 step=阶梯保持'),
+    rangeSemitones: z
+      .number()
+      .min(1)
+      .max(24)
+      .optional()
+      .describe('音源的实际弯音范围（半音），GM 默认 ±2；换算用，只影响数值的映射比例'),
+    trackIndex: z.number().int().optional().describe('缺省作用于所有非鼓组音符轨道'),
+  }),
+  z.object({
     type: z.literal('add_sustain'),
     trackIndex: z.number().int().optional(),
     gapBeats: z.number().min(0).max(4).optional().describe('音间间隔小于该值（拍）时延音持续，默认 0.25'),
@@ -218,6 +240,7 @@ export function createBuiltinMidiServer(store: MidiStore, getSessionId: () => st
             count: v.count,
             valueRange: [v.min, v.max],
           })),
+          pitchBend: t.pitchBend ? { count: t.pitchBend.count, valueRange: [t.pitchBend.min, t.pitchBend.max] } : null,
         })),
         chordsByBar: chords.map((c) => ({ bar: c.bar, chord: c.chord })),
         notesPreview: doc.tracks
@@ -240,7 +263,7 @@ export function createBuiltinMidiServer(store: MidiStore, getSessionId: () => st
       description:
         '对一个已有 MIDI 执行一系列修改操作，生成新的 MIDI（原版本保留）。' +
         '常用操作：humanize_velocity（真实力度）、auto_cc_curve（为任意 CC 自动生成起伏曲线，controller 可选 11 表情/1 调制等）、' +
-        'set_cc_curve（精确绘制任意 CC 曲线：给 {bar, beat, value} 控制点 + 插值方式）、change_chords（改变和弦进行）、' +
+        'set_cc_curve（精确绘制任意 CC 曲线）、set_pitch_bend（精确绘制弯音/滑音曲线）、change_chords（改变和弦进行）、' +
         'transpose（移调）、quantize（量化）、add_sustain（延音踏板）、humanize_timing（微小时值偏移）、set_tempo、set_program（换音色）等。' +
         '操作按数组顺序依次执行。若尚未分析过该 MIDI，建议先调用 analyze_midi。',
       inputSchema: z.object({

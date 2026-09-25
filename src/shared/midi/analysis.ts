@@ -157,6 +157,7 @@ export interface TrackStats {
   maxVelocity: number;
   controllers: Record<number, number>; // CC 号 → 事件数
   controllerValues: Record<number, { min: number; max: number; count: number }>; // CC 号 → 值域与事件数
+  pitchBend: { count: number; min: number; max: number } | null; // 14 位值（8192 居中）
   durationSec: number;
 }
 
@@ -194,6 +195,13 @@ export function analyzeStats(doc: MidiDocument): MidiStats {
     }
     const pitches = t.notes.map((n) => n.pitch);
     const vels = t.notes.map((n) => n.velocity);
+    const pitchBend = t.pitchBends.length
+      ? {
+          count: t.pitchBends.length,
+          min: Math.min(...t.pitchBends.map((b) => b.value)),
+          max: Math.max(...t.pitchBends.map((b) => b.value)),
+        }
+      : null;
     return {
       index,
       name: t.name || `Track ${index + 1}`,
@@ -206,6 +214,7 @@ export function analyzeStats(doc: MidiDocument): MidiStats {
       maxVelocity: vels.length ? Math.max(...vels) : 0,
       controllers,
       controllerValues,
+      pitchBend,
       durationSec: t.notes.length ? Math.max(...t.notes.map((n) => ticksToSec(n.endTick, tpq, tempoMap))) : 0,
     };
   });

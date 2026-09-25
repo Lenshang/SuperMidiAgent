@@ -105,6 +105,25 @@ export default function PianoRoll({ doc, durationSec, positionSec, height = 150,
       }
     }
 
+    // Pitch Bend 叠加（青色；8192 居中，±8192 满幅）
+    {
+      for (const track of doc.tracks) {
+        const bends = track.pitchBends;
+        if (bends.length < 2) continue;
+        ctx.strokeStyle = 'rgba(74, 223, 255, 0.85)';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        bends.forEach((b, i) => {
+          const x = xOf(ticksToSec(b.tick, tpq, tempoMap));
+          const y = height - 2 - (b.value / 16383) * 14;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+        ctx.lineWidth = 1;
+      }
+    }
+
     // 播放指针
     if (positionSec >= 0) {
       const x = xOf(Math.min(positionSec, durationSec));

@@ -203,6 +203,7 @@ const clamp = (v: number, min: number, max: number): number => Math.min(max, Mat
 
 /**
  * 调度一个合成音符（双振荡器 → 滤波器 → ADSR 增益 → dest）。
+ * vibrato：颤音 LFO 输出（音分），bendSource：Pitch Bend 调制（音分，恒流源）。
  * 返回节点列表供调用方在 stop 时清理。
  */
 export function scheduleSynthNote(
@@ -214,6 +215,7 @@ export function scheduleSynthNote(
   t0: number,
   t1: number,
   vibrato?: GainNode | null,
+  bendSource?: ConstantSourceNode | null,
 ): { oscs: OscillatorNode[]; gain: GainNode } {
   const freq = clamp(440 * Math.pow(2, (pitch - 69) / 12), 20, 8000);
   const vel = clamp(velocity / 127, 0.02, 1);
@@ -237,6 +239,7 @@ export function scheduleSynthNote(
     osc.frequency.value = clamp(freq * Math.pow(2, octave), 20, 12000);
     osc.detune.value = detune;
     if (vibrato) vibrato.connect(osc.detune);
+    if (bendSource) bendSource.connect(osc.detune);
     const g = ctx.createGain();
     g.gain.value = level * norm;
     osc.connect(g);

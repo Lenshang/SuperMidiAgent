@@ -31,6 +31,7 @@ export class MidiPlayer {
   private paused = false;
   private endTimer: ReturnType<typeof setTimeout> | null = null;
   private lfos: VibratoLfo[] = [];
+  private bendSources: ConstantSourceNode[] = [];
   private volume = 0.85;
   onEnded: (() => void) | null = null;
 
@@ -173,10 +174,27 @@ export class MidiPlayer {
         return n.endTick;
       };
 
-      // 每轨颤音 LFO：音色自带深度 或 轨道上有 CC1（调制）事件时创建，CC1 实时控制深度
+      // 每轨 Pitch Bend：恒流源（音分）→ 每个振荡器的 detune，实时跟随弯音事件
       const synth = trackSynths[trackIndex];
       let vibGain: GainNode | null = null;
+      let bendSource: ConstantSourceNode | null = null;
       if (!isDrum && synth) {
+        const bends = [...track.pitchBends].sort((a, b) => a.tick - b.tick);
+        if (bends.length > 0) {
+          bendSource = ctx.createConstantSource();
+          bendSource.offset.value = 0;
+          this.bendSources.push(bendSource);
+          bendSource.start(now);
+          const mapBend = (v: number): number => ((v - 8192) / 8192) * 200; // ±2 半音 → ±200 音分
+          const past = bends.filter((b) => ticksToSec(b.tick, tpq, tempoMap) <= fromSec);
+          bendSource.offset.value = past.length > 0 ? mapBend(past[past.length - 1].value) : mapBend(bends[0].value);
+          for (const b of bends) {
+            const t = now + ticksToSec(b.tick, tpq, tempoMap) - fromSec;
+            if (t <= now + 0.005) continue;
+            bendSource.offset.linearRampToValueAtTime(mapBend(b.value), Math.max(now + 0.005, t));
+          }
+        }
+
         const cc1 = track.controls.filter((c) => c.controller === 1);
         const baseDepth = synth.vibrato.depth;
         if (baseDepth > 0 || cc1.length > 0) {
@@ -203,7 +221,7 @@ export class MidiPlayer {
         const t1 = Math.max(t0 + 0.06, now + (s1 - fromSec));
         const scheduled = isDrum
           ? scheduleDrumHit(ctx, trackGain, note.pitch, note.velocity, t0)
-          : scheduleSynthNote(ctx, trackGain, synth, note.pitch, note.velocity, t0, t1, vibGain);
+          : scheduleSynthNote(ctx, trackGain, synth, note.pitch, note.velocity, t0, t1, vibGain, bendSource);
         this.scheduled.push(scheduled);
       }
     });
@@ -261,6 +279,14 @@ export class MidiPlayer {
       }
     }
     this.lfos = [];
+    for (const src of this.bendSources) {
+      try {
+        src.stop(this.ctx!.currentTime + 0.1);
+      } catch {
+        // ignore
+      }
+    }
+    this.bendSources = [];
     this.playing = false;
     this.paused = false;
     if (this.ctx) {

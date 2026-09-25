@@ -257,3 +257,38 @@ describe('内置 MIDI MCP 服务', () => {
     }
   });
 });
+
+describe('modify_midi set_pitch_bend', () => {
+  it('通过 MCP 协议绘制弯音', async () => {
+    const localStore = new MidiStore(null);
+    const client = await makeClient(localStore);
+    const created = await call(client, 'create_midi', {
+      title: '弯音测试',
+      tracks: [
+        {
+          notes: Array.from({ length: 16 }, (_, i) => ({ pitch: 64 + (i % 4) * 2, start: i * 0.5, duration: 0.45, velocity: 90 })),
+        },
+      ],
+    });
+    const modified = await call(client, 'modify_midi', {
+      midiId: created.midiId,
+      operations: [
+        {
+          type: 'set_pitch_bend',
+          curve: 'linear',
+          points: [
+            { bar: 1, semitones: -2 },
+            { bar: 3, semitones: 2 },
+          ],
+        },
+      ],
+    });
+    expect(modified.ok).toBe(true);
+    const doc = localStore.getDoc(modified.midiId as string)!;
+    const bends = doc.tracks[1].pitchBends;
+    expect(bends.length).toBeGreaterThan(10);
+    expect(Math.min(...bends.map((b) => b.value))).toBeLessThan(100);
+    expect(Math.max(...bends.map((b) => b.value))).toBeGreaterThan(16000);
+    await client.close();
+  });
+});
