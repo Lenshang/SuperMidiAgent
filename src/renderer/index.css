@@ -209,6 +209,39 @@ html, body, #root {
 
 .midi-volume { display: inline-flex; align-items: center; }
 
+/* 待发送 MIDI 附件条 */
+.pending-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.pending-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #343452;
+  background: rgba(124, 92, 255, 0.08);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12.5px;
+  max-width: 280px;
+}
+.pending-chip .pending-icon { color: #b9a8ff; flex-shrink: 0; }
+.pending-chip .pending-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #cfcfe4; }
+.pending-chip .pending-remove {
+  border: none;
+  background: transparent;
+  color: #8a8aa8;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+}
+.pending-chip .pending-remove:hover { color: #ff6b6b; }
+.pending-hint { color: #6d6d88; font-size: 12px; }
+
 /* ============ 设置 ============ */
 
 /* 工具调用 */

@@ -129,21 +129,24 @@ await page.waitForSelector('[data-testid="sender-input"]', { timeout: 20000 });
 ok('页面加载', true);
 
 console.log('\n== 2. 配置模型服务（通过 preload API 注入；密钥只来自环境变量）==');
-const seeded = await page.evaluate(async () => {
+const ENV_MODEL = process.env.TEST_MODEL ?? 'MiniMax-M3';
+const ENV_BASE_URL = process.env.TEST_BASE_URL ?? 'https://api.minimax.cn/v1';
+const ENV_API_KEY = process.env.TEST_API_KEY ?? '';
+const seeded = await page.evaluate(async ({ model, baseUrl, apiKey }) => {
   await window.api.settingsUpsertProfile({
     id: 'minimax-gui',
-    name: process.env.TEST_MODEL ?? 'GUI-Test',
-    baseUrl: process.env.TEST_BASE_URL ?? 'https://api.minimax.cn/v1',
-    apiKey: process.env.TEST_API_KEY ?? '',
-    model: process.env.TEST_MODEL ?? 'MiniMax-M3',
+    name: model,
+    baseUrl,
+    apiKey,
+    model,
     temperature: 0.7,
   });
   await window.api.settingsSet({ activeProfileId: 'minimax-gui' });
   const s = await window.api.settingsGet();
   return s.activeProfileId;
-});
+}, { model: ENV_MODEL, baseUrl: ENV_BASE_URL, apiKey: ENV_API_KEY });
 ok('模型配置注入', seeded === 'minimax-gui', `activeProfileId=${seeded}`);
-if (!process.env.TEST_API_KEY) {
+if (!ENV_API_KEY) {
   console.log('  [warn] 未设置 TEST_API_KEY 环境变量——依赖真实模型的测试步骤将失败');
 }
 
@@ -151,11 +154,11 @@ console.log('\n== 3. 设置界面检查 ==');
 await page.locator('[data-testid="open-settings"]').click();
 await page.waitForSelector('[data-testid="default-profile-select"]', { timeout: 10000 });
 await shot('03-settings-models');
-const profileCard = await page.locator('[data-profile-name="MiniMax-M3"]').count();
+const profileCard = await page.locator(`[data-profile-name="${ENV_MODEL}"]`).count();
 ok('模型配置卡片显示', profileCard === 1);
 
 // 测试连接（真实 API）
-await page.locator('[data-profile-name="MiniMax-M3"] button:has-text("测试")').click();
+await page.locator(`[data-profile-name="${ENV_MODEL}"] button:has-text("测试")`).click();
 const testResult = await page
   .waitForSelector('.ant-message-success, .ant-message-error', { timeout: 30000 })
   .then(() => page.locator('.ant-message').innerText())
@@ -259,20 +262,29 @@ const appAlive2 = await page.evaluate(() => document.title);
 ok('拖拽后应用仍响应', appAlive2 === 'SuperMidiAgent', `title=${appAlive2}`);
 await page.waitForTimeout(500);
 
-console.log('\n== 8. 上传 MIDI 并让 AI 分析 ==');
+console.log('\n== 8. 上传 MIDI（附件模式：不自动发送）==');
 if (downloadedPath) {
-  const toolCountBefore = await page.locator('[data-testid="tool-activity"]').count();
+  const userMsgsBefore = await page.locator('[data-testid="user-message"]').count();
+  const runsBefore = await page.evaluate(() => document.querySelectorAll('[data-testid="tool-activity"]').length);
   await page.setInputFiles('[data-testid="midi-file-input"]', downloadedPath);
-  // 等待新的工具活动出现（分析通常调用 analyze_midi）
+  await page.waitForTimeout(1500);
+  const chips = await page.locator('[data-testid="pending-attachments"] .pending-chip').count();
+  ok('上传后出现附件条', chips >= 1, `chips=${chips}`);
+  const userMsgsAfter = await page.locator('[data-testid="user-message"]').count();
+  ok('附件不自动发送', userMsgsAfter === userMsgsBefore, `用户消息 ${userMsgsBefore} → ${userMsgsAfter}`);
+
+  // 输入说明并发送
+  const input = page.locator('[data-testid="sender-input"] textarea');
+  await input.fill('请分析这个 MIDI 文件');
+  await input.press('Enter');
   const deadline = Date.now() + 240000;
-  let toolAfter = toolCountBefore;
+  let toolAfter = runsBefore;
   while (Date.now() < deadline) {
-    toolAfter = await page.locator('[data-testid="tool-activity"]').count();
-    if (toolAfter > toolCountBefore) break;
+    toolAfter = await page.evaluate(() => document.querySelectorAll('[data-testid="tool-activity"]').length);
+    if (toolAfter > runsBefore) break;
     await page.waitForTimeout(2000);
   }
-  ok('上传后触发工具调用', toolAfter > toolCountBefore, `tools ${toolCountBefore} → ${toolAfter}`);
-  // 等待本轮回复完全结束
+  ok('发送后触发工具调用', toolAfter > runsBefore, `tools ${runsBefore} → ${toolAfter}`);
   const done = await waitRunDone(240000);
   ok('分析回复完成', done);
   await page.waitForTimeout(800);
@@ -281,6 +293,8 @@ if (downloadedPath) {
   ok('分析包含音乐要素', /调|和弦|力度|小节/.test(analysisText), '分析文本包含音乐术语');
   const cardCountAfterUpload = await page.locator('[data-testid="midi-card"]').count();
   ok('分析不产生重复卡片', cardCountAfterUpload === 2, `cards=${cardCountAfterUpload}`);
+  const chipsAfterSend = await page.locator('[data-testid="pending-attachments"] .pending-chip').count();
+  ok('发送后附件条清空', chipsAfterSend === 0, `chips=${chipsAfterSend}`);
 } else {
   ok('上传分析（跳过：无下载文件）', false, '前置下载失败');
 }

@@ -31,14 +31,41 @@ export default function ChatPanel(): JSX.Element {
   const runningRunId = useAppStore((s) => s.runningRunId);
   const draft = useAppStore((s) => s.draft[activeId] ?? '');
   const kbEnabled = useAppStore((s) => s.kbEnabled);
-  const settings = useAppStore((s) => s.assets);
+  const assets = useAppStore((s) => s.assets);
 
   const session = sessions.find((s) => s.id === activeId);
   const [dragOver, setDragOver] = useState(false);
+  const [pending, setPending] = useState<string[]>([]); // 待发送的 MIDI 附件
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dragCounter = useRef(0);
-  const settingsRef = useRef(settings);
-  settingsRef.current = settings;
+  const assetsRef = useRef(assets);
+  assetsRef.current = assets;
+
+  // 切换会话时清空未发送的附件
+  useEffect(() => {
+    setPending([]);
+  }, [activeId]);
+
+  /** 导入 MIDI 文件并添加为待发送附件（不自动发送）。 */
+  const importMidiFiles = useCallback(
+    async (files: File[]): Promise<void> => {
+      const added: string[] = [];
+      for (const file of files) {
+        try {
+          const buf = await file.arrayBuffer();
+          const meta = (await window.api.midiImportBytes(buf, file.name.replace(/\.midi?$/i, ''))) as { id: string; title: string };
+          useAppStore.getState().registerAssets([meta as never]);
+          added.push(meta.id);
+        } catch (err) {
+          antdMessage.error(`导入「${file.name}」失败：${err instanceof Error ? err.message : String(err)}`.slice(0, 140));
+        }
+      }
+      if (added.length === 0) return;
+      setPending((p) => [...p, ...added.filter((id) => !p.includes(id))]);
+      antdMessage.success(`已添加 ${added.length} 个 MIDI 附件，输入说明后按 Enter 发送`);
+    },
+    [antdMessage],
+  );
 
   const send = useCallback(
     async (text: string, midiIds: string[] = []) => {
@@ -53,10 +80,14 @@ export default function ChatPanel(): JSX.Element {
       let fullText = trimmed;
       if (midiIds.length > 0) {
         const parts = midiIds.map((id, i) => `[上传了 MIDI 文件「${st.assets[id]?.title ?? `MIDI${i + 1}`}」，midiId=${id}]`);
-        fullText = `${trimmed ? trimmed + '\n\n' : '请分析这个 MIDI 文件并给出专业建议。\n\n'}${parts.join('\n')}`;
+        const refs = parts.join('\n');
+        fullText = trimmed
+          ? `${trimmed}\n\n${refs}`
+          : `（用户刚上传了 MIDI 附件，还没有说明需求）请先简要分析这个 MIDI 的调性、和弦、力度与结构，然后询问用户想做什么调整，不要直接修改。\n\n${refs}`;
       }
       st.appendUserMessage(sessionId, fullText, midiIds);
       st.setDraft(sessionId, '');
+      setPending((p) => p.filter((id) => !midiIds.includes(id)));
 
       const runId = genId();
       wireBuilder.start(runId);
@@ -84,7 +115,7 @@ export default function ChatPanel(): JSX.Element {
     return off;
   }, []);
 
-  // 拖放上传
+  // 拖放上传：只添加为附件，不自动发送
   useEffect(() => {
     const onDragOver = (e: Event): void => {
       e.preventDefault();
@@ -96,22 +127,7 @@ export default function ChatPanel(): JSX.Element {
       const de = e as DragEvent;
       const files = Array.from(de.dataTransfer?.files ?? []).filter((f) => /\.midi?$/i.test(f.name));
       if (files.length === 0) return;
-      void (async () => {
-        const imported: string[] = [];
-        for (const file of files) {
-          try {
-            const buf = await file.arrayBuffer();
-            const meta = (await window.api.midiImportBytes(buf, file.name.replace(/\.midi?$/i, ''))) as { id: string; title: string };
-            useAppStore.getState().registerAssets([meta as never]);
-            imported.push(meta.id);
-          } catch (err) {
-            antdMessage.error(`导入「${file.name}」失败：${err instanceof Error ? err.message : String(err)}`.slice(0, 140));
-          }
-        }
-        if (imported.length === 0) return;
-        antdMessage.success(`已导入 ${imported.length} 个 MIDI 文件`);
-        void send(useAppStore.getState().draft[useAppStore.getState().activeSessionId] ?? '', imported);
-      })();
+      void importMidiFiles(files);
     };
     window.addEventListener('dragover', onDragOver);
     window.addEventListener('drop', onDrop);
@@ -119,23 +135,11 @@ export default function ChatPanel(): JSX.Element {
       window.removeEventListener('dragover', onDragOver);
       window.removeEventListener('drop', onDrop);
     };
-  }, [send, antdMessage]);
+  }, [importMidiFiles]);
 
   const onPickFile = async (files: FileList | null): Promise<void> => {
     if (!files || files.length === 0) return;
-    const imported: string[] = [];
-    for (const file of Array.from(files)) {
-      try {
-        const buf = await file.arrayBuffer();
-        const meta = (await window.api.midiImportBytes(buf, file.name.replace(/\.midi?$/i, ''))) as { id: string; title: string };
-        useAppStore.getState().registerAssets([meta as never]);
-        imported.push(meta.id);
-      } catch (err) {
-        antdMessage.error(`导入「${file.name}」失败：${err instanceof Error ? err.message : String(err)}`.slice(0, 140));
-      }
-    }
-    if (imported.length === 0) return;
-    void send(draft, imported);
+    await importMidiFiles(Array.from(files));
   };
 
   const stopRun = (): void => {
@@ -179,7 +183,7 @@ export default function ChatPanel(): JSX.Element {
     >
       {dragOver && (
         <div className="drop-mask">
-          <div className="drop-mask-inner">松开鼠标，导入 MIDI 文件（.mid / .midi）</div>
+          <div className="drop-mask-inner">松开鼠标，把 MIDI 添加为附件（发送前可继续输入说明）</div>
         </div>
       )}
 
@@ -242,17 +246,36 @@ export default function ChatPanel(): JSX.Element {
               </Space>
             </Tooltip>
             <Typography.Text type="secondary" className="toolbar-hint">
-              也可以直接把 .mid 文件拖进窗口
+              也可以把 .mid 文件拖进窗口作为附件
             </Typography.Text>
           </Space>
         </div>
+        {pending.length > 0 && (
+          <div className="pending-attachments" data-testid="pending-attachments">
+            {pending.map((id) => (
+              <span key={id} className="pending-chip">
+                <span className="pending-icon">♪</span>
+                <span className="pending-name">{assets[id]?.title ?? id}</span>
+                <button
+                  className="pending-remove"
+                  aria-label="移除附件"
+                  title="移除附件"
+                  onClick={() => setPending((p) => p.filter((x) => x !== id))}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            <span className="pending-hint">输入说明（可留空）后按 Enter 发送</span>
+          </div>
+        )}
         <Sender
           value={draft}
           onChange={(v) => useAppStore.getState().setDraft(activeId, v)}
-          onSubmit={(text) => void send(text)}
+          onSubmit={(text) => void send(text, pending)}
           onCancel={stopRun}
           loading={!!runningRunId}
-          placeholder="描述你想要的 MIDI 音乐，或让我分析 / 修改已上传的 MIDI…（Enter 发送，Shift+Enter 换行）"
+          placeholder="描述你想要的 MIDI 音乐，或先上传 MIDI 附件再说明需求…（Enter 发送，Shift+Enter 换行）"
           data-testid="sender-input"
         />
       </div>
