@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: 编译与测试（${{ matrix.os }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # 快速验证用两个 1 倍计费系统；macOS 打包在 Release 工作流中执行（mac runner 按 10 倍计费）
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 密钥泄漏扫描
+        run: node scripts/secret-scan.mjs
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      - name: 单元测试
+        run: npm test
+
+      - name: 构建应用资源
+        run: npm run build
+
+      - name: 打包（当前平台，未压缩目录版）
+        run: npx electron-builder --dir
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: SuperMidiAgent-unpacked-${{ matrix.os }}
+          path: |
+            release/win-unpacked/
+            release/linux-unpacked/
+          if-no-files-found: ignore
+          retention-days: 7

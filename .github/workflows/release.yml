@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 发布（${{ matrix.os }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 密钥泄漏扫描
+        run: node scripts/secret-scan.mjs
+
+      - name: 单元测试
+        run: npm test
+
+      - name: 构建应用资源
+        run: npm run build
+
+      # electron-builder 按当前系统自动选择目标：
+      #   windows → NSIS 安装版 + Portable 便携版
+      #   macos   → dmg + zip（arm64 / x64 双架构，未签名）
+      #   linux   → AppImage（x64 / arm64）+ deb（x64）
+      # 并将产物发布到与 tag 同名的 GitHub Release
+      - name: 打包并发布 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --publish always
