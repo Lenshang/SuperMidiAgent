@@ -88,45 +88,54 @@ function noteChannel(trackChannel: number, noteChannel: number | undefined, trac
   return ch;
 }
 
-/** 将文档编码为 SMF 字节。format 1：轨道 0 为速度轨（若第一条轨道含速度信息则直接使用）。 */
+/** 轨道是否携带通道事件（音符/CC/弯音）。纯速度轨（经典 format 1 布局的轨道 0）没有这些。 */
+function hasChannelData(track: import('./types').MidiTrack): boolean {
+  return track.notes.length > 0 || track.controls.length > 0 || track.pitchBends.length > 0;
+}
+
+/** 将文档编码为 SMF 字节。format 1 时仅当轨道 0 不含通道事件（纯速度轨）才按速度轨处理；
+ *  DAW（如 Bitwig）常把速度与音符合并在单轨里，此时必须完整写出该轨道的音符。 */
 export function writeMidi(doc: MidiDocument): Uint8Array {
   const header = new ByteWriter();
   header.str('MThd').u32(6).u16(doc.format).u16(doc.format === 0 ? 1 : doc.tracks.length).u16(doc.ticksPerQuarter);
 
   const trackChunks: Uint8Array[] = [];
   const tracks = doc.format === 0 ? [mergeToSingleTrack(doc)] : doc.tracks;
+  // 保证输出文件至少有一个速度/拍号事件：全文档都没有时在轨道 0 写默认值
+  const anyTempo = tracks.some((t) => t.tempos.length > 0);
+  const anySig = tracks.some((t) => t.timeSignatures.length > 0);
 
   tracks.forEach((track, index) => {
     const w = new ByteWriter();
     const events: FlatEvent[] = [];
-    const isConductor = doc.format === 1 && index === 0;
 
     if (track.name) {
       const data = strBytes(track.name);
       events.push({ tick: 0, order: 0, emit: (ww) => meta(ww, 0x03, data) });
     }
 
-    if (isConductor || doc.format === 0) {
-      const tempos = track.tempos.length
-        ? [...track.tempos].sort((a, b) => a.tick - b.tick)
-        : [{ tick: 0, usPerQuarter: DEFAULT_US_PER_QUARTER }];
-      for (const t of tempos) {
-        const data = tempoToBytes(t);
-        events.push({ tick: t.tick, order: 0, emit: (ww) => meta(ww, 0x51, data) });
-      }
-      const sigs = track.timeSignatures.length
-        ? [...track.timeSignatures].sort((a, b) => a.tick - b.tick)
-        : [{ tick: 0, numerator: 4, denominator: 4 }];
-      for (const s of sigs) {
-        const data = timeSigToBytes(s);
-        events.push({ tick: s.tick, order: 0, emit: (ww) => meta(ww, 0x58, data) });
-      }
+    // 速度/拍号：每个轨道写出自己携带的事件（经典布局在轨道 0；合并布局在音符轨内）
+    for (const t of [...track.tempos].sort((a, b) => a.tick - b.tick)) {
+      const data = tempoToBytes(t);
+      events.push({ tick: t.tick, order: 0, emit: (ww) => meta(ww, 0x51, data) });
+    }
+    if (index === 0 && !anyTempo) {
+      const data = tempoToBytes({ tick: 0, usPerQuarter: DEFAULT_US_PER_QUARTER });
+      events.push({ tick: 0, order: 0, emit: (ww) => meta(ww, 0x51, data) });
+    }
+    for (const s of [...track.timeSignatures].sort((a, b) => a.tick - b.tick)) {
+      const data = timeSigToBytes(s);
+      events.push({ tick: s.tick, order: 0, emit: (ww) => meta(ww, 0x58, data) });
+    }
+    if (index === 0 && !anySig) {
+      const data = timeSigToBytes({ tick: 0, numerator: 4, denominator: 4 });
+      events.push({ tick: 0, order: 0, emit: (ww) => meta(ww, 0x58, data) });
     }
 
     if (doc.format === 0) {
       // format 0：所有轨道事件已合并，通道信息保留在事件本身
       emitChannelEvents(events, track, -1);
-    } else if (!isConductor) {
+    } else if (hasChannelData(track)) {
       const ch = noteChannel(track.channel, undefined, index);
       events.push({
         tick: 0,

@@ -180,6 +180,64 @@ describe('解析容错', () => {
     expect(() => parseMidi(text)).toThrow();
   });
 
+  it('format 1 单轨（DAW 合并式：速度与音符同轨，Bitwig 风格）round-trip', () => {
+    // 回归：旧写入器把 format 1 的轨道 0 一律当纯速度轨，导致音符全部丢失
+    const doc = createEmptyDocument(480);
+    doc.format = 1;
+    doc.tracks = [];
+    const t = createEmptyTrack('Clip', 0);
+    t.channel = 0;
+    t.tempos.push({ tick: 0, usPerQuarter: 500000 });
+    t.timeSignatures.push({ tick: 0, numerator: 4, denominator: 4 });
+    t.notes.push(
+      { pitch: 86, velocity: 100, startTick: 0, endTick: 960 },
+      { pitch: 81, velocity: 100, startTick: 960, endTick: 1920 },
+      { pitch: 82, velocity: 100, startTick: 1920, endTick: 2880 },
+    );
+    doc.tracks.push(t);
+    const parsed = parseMidi(writeMidi(doc));
+    expect(parsed.format).toBe(1);
+    expect(parsed.tracks).toHaveLength(1);
+    expect(parsed.tracks[0].notes).toHaveLength(3);
+    expect(parsed.tracks[0].notes[0]).toMatchObject({ pitch: 86, velocity: 100, startTick: 0, endTick: 960 });
+    expect(parsed.tracks[0].tempos[0].usPerQuarter).toBe(500000);
+    expect(parsed.tracks[0].timeSignatures[0]).toMatchObject({ numerator: 4, denominator: 4 });
+    expect(parsed.tracks[0].channel).toBe(0);
+    expect(parsed.tracks[0].program).toBe(0);
+  });
+
+  it('经典双轨：纯速度轨不产生多余音符与音色事件', () => {
+    const doc = createEmptyDocument(480);
+    const track = createEmptyTrack('Melody', 40);
+    track.notes.push({ pitch: 60, velocity: 90, startTick: 480, endTick: 960 });
+    doc.tracks.push(track);
+    const parsed = parseMidi(writeMidi(doc));
+    expect(parsed.tracks).toHaveLength(2);
+    // 轨道 0：只有速度/拍号，无音符
+    expect(parsed.tracks[0].notes).toHaveLength(0);
+    expect(parsed.tracks[0].tempos).toHaveLength(1);
+    // 轨道 1：音符完整，音色正确
+    expect(parsed.tracks[1].notes).toHaveLength(1);
+    expect(parsed.tracks[1].program).toBe(40);
+  });
+
+  it('存储往返：写入的字节重新解析后音符一致（analyze_midi 场景）', () => {
+    const doc = createEmptyDocument(480);
+    doc.format = 1;
+    doc.tracks = [];
+    const t = createEmptyTrack('', 0);
+    t.tempos.push({ tick: 0, usPerQuarter: 500000 });
+    for (let i = 0; i < 8; i++) {
+      t.notes.push({ pitch: [86, 81, 82, 79, 81, 77, 76, 84][i], velocity: 100, startTick: i * 960, endTick: (i + 1) * 960 });
+    }
+    doc.tracks.push(t);
+    // 模拟 MidiStore：create 时写盘，analyze_midi 时重新解析
+    const bytes = writeMidi(doc);
+    const reparsed = parseMidi(bytes);
+    expect(reparsed.tracks[0].notes).toHaveLength(8);
+    expect(reparsed.tracks.map((x) => x.notes.length).reduce((a, b) => a + b, 0)).toBe(8);
+  });
+
   it('running status 解析', () => {
     // 第二个 note-on 使用 running status（省略 0x90）
     const bytes = Uint8Array.from([

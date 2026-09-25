@@ -99,11 +99,16 @@ export default function ChatPanel(): JSX.Element {
       void (async () => {
         const imported: string[] = [];
         for (const file of files) {
-          const buf = await file.arrayBuffer();
-          const meta = (await window.api.midiImportBytes(buf, file.name.replace(/\.midi?$/i, ''))) as { id: string; title: string };
-          useAppStore.getState().registerAssets([meta as never]);
-          imported.push(meta.id);
+          try {
+            const buf = await file.arrayBuffer();
+            const meta = (await window.api.midiImportBytes(buf, file.name.replace(/\.midi?$/i, ''))) as { id: string; title: string };
+            useAppStore.getState().registerAssets([meta as never]);
+            imported.push(meta.id);
+          } catch (err) {
+            antdMessage.error(`导入「${file.name}」失败：${err instanceof Error ? err.message : String(err)}`.slice(0, 140));
+          }
         }
+        if (imported.length === 0) return;
         antdMessage.success(`已导入 ${imported.length} 个 MIDI 文件`);
         void send(useAppStore.getState().draft[useAppStore.getState().activeSessionId] ?? '', imported);
       })();
@@ -120,11 +125,16 @@ export default function ChatPanel(): JSX.Element {
     if (!files || files.length === 0) return;
     const imported: string[] = [];
     for (const file of Array.from(files)) {
-      const buf = await file.arrayBuffer();
-      const meta = (await window.api.midiImportBytes(buf, file.name.replace(/\.midi?$/i, ''))) as { id: string; title: string };
-      useAppStore.getState().registerAssets([meta as never]);
-      imported.push(meta.id);
+      try {
+        const buf = await file.arrayBuffer();
+        const meta = (await window.api.midiImportBytes(buf, file.name.replace(/\.midi?$/i, ''))) as { id: string; title: string };
+        useAppStore.getState().registerAssets([meta as never]);
+        imported.push(meta.id);
+      } catch (err) {
+        antdMessage.error(`导入「${file.name}」失败：${err instanceof Error ? err.message : String(err)}`.slice(0, 140));
+      }
     }
+    if (imported.length === 0) return;
     void send(draft, imported);
   };
 
