@@ -156,6 +156,7 @@ export interface TrackStats {
   minVelocity: number;
   maxVelocity: number;
   controllers: Record<number, number>; // CC 号 → 事件数
+  controllerValues: Record<number, { min: number; max: number; count: number }>; // CC 号 → 值域与事件数
   durationSec: number;
 }
 
@@ -182,7 +183,15 @@ export function analyzeStats(doc: MidiDocument): MidiStats {
   const durationSec = docDurationSec(doc);
   const tracks: TrackStats[] = doc.tracks.map((t, index) => {
     const controllers: Record<number, number> = {};
-    for (const c of t.controls) controllers[c.controller] = (controllers[c.controller] ?? 0) + 1;
+    const controllerValues: Record<number, { min: number; max: number; count: number }> = {};
+    for (const c of t.controls) {
+      controllers[c.controller] = (controllers[c.controller] ?? 0) + 1;
+      const e = controllerValues[c.controller] ?? { min: 127, max: 0, count: 0 };
+      e.min = Math.min(e.min, c.value);
+      e.max = Math.max(e.max, c.value);
+      e.count += 1;
+      controllerValues[c.controller] = e;
+    }
     const pitches = t.notes.map((n) => n.pitch);
     const vels = t.notes.map((n) => n.velocity);
     return {
@@ -196,6 +205,7 @@ export function analyzeStats(doc: MidiDocument): MidiStats {
       minVelocity: vels.length ? Math.min(...vels) : 0,
       maxVelocity: vels.length ? Math.max(...vels) : 0,
       controllers,
+      controllerValues,
       durationSec: t.notes.length ? Math.max(...t.notes.map((n) => ticksToSec(n.endTick, tpq, tempoMap))) : 0,
     };
   });

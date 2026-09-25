@@ -107,19 +107,25 @@ export interface CC11Options {
   intensity?: number; // 0-1，默认 0.5
   seed?: number;
   gridTicks?: number; // 采样步长，默认 1/8 拍
+  min?: number; // 曲线下限 0-127，默认 40
+  max?: number; // 曲线上限 0-127，默认 122；曲线整体落在这个值域内
 }
 
 /**
- * 生成真实的 CC11（表情）曲线：
- * - 每个乐句一条弧线：起步 ~84，45% 处达峰（+24×intensity），句尾回落；
+ * 生成 CC11（表情）曲线：
+ * - 每个乐句一条弧线：起步于值域中部偏下，45% 处达峰（接近 max），句尾回落（接近 min）；
  * - 长音（≥1 拍）内部有轻微 swell；
  * - 乐句边界轻微收束，制造呼吸感；
- * - 采样后做滑动平均平滑，值域 0-127。
+ * - 所有值严格落在 [min, max] 内（min 默认 40，max 默认 122，可指定 0-127 任意范围）；
+ * - 采样后做滑动平均平滑。
  * 会替换轨道上已有的 CC11。
  */
 export function generateCC11(doc: MidiDocument, opts: CC11Options): MidiDocument {
   const intensity = Math.max(0, Math.min(1, opts.intensity ?? 0.5));
   const grid = Math.max(15, Math.round(opts.gridTicks ?? doc.ticksPerQuarter / 8));
+  const lo = Math.max(0, Math.min(127, Math.round(opts.min ?? 40)));
+  const hi = Math.max(Math.min(127, Math.round(opts.max ?? 122)), lo + 6);
+  const span = hi - lo;
   const out = cloneDocument(doc);
   out.tracks.forEach((track, ti) => {
     if (opts.trackIndex !== undefined && ti !== opts.trackIndex) return;
@@ -132,9 +138,9 @@ export function generateCC11(doc: MidiDocument, opts: CC11Options): MidiDocument
 
     phrases.forEach((phrase, pi) => {
       const pLen = Math.max(grid, phrase.endTick - phrase.startTick);
-      const v0 = 82 + Math.round(gaussian(rng) * 3);
-      const peak = Math.min(124, v0 + Math.round(24 * intensity + gaussian(rng) * 4));
-      const tail = Math.max(70, v0 - Math.round(8 * intensity));
+      const v0 = Math.round(lo + span * (0.42 + gaussian(rng) * 0.05));
+      const peak = Math.round(hi - Math.abs(gaussian(rng)) * span * 0.04);
+      const tail = Math.round(lo + span * (0.22 + gaussian(rng) * 0.05));
       const nextStart = phrases[pi + 1]?.startTick ?? phrase.endTick;
       // 起音保留：乐句开始的极短窗口内保持较高，避免吞掉音头
       const attackTicks = Math.min(Math.round(out.ticksPerQuarter / 2), Math.round(pLen * 0.12));
@@ -164,7 +170,8 @@ export function generateCC11(doc: MidiDocument, opts: CC11Options): MidiDocument
           const hProgress = (t - holding.startTick) / (holding.endTick - holding.startTick);
           value += Math.sin(Math.PI * Math.min(1, hProgress)) * 5 * intensity;
         }
-        samples.push({ tick: t, value: clampCC(value) });
+        // 严格落在 [lo, hi] 值域内
+        samples.push({ tick: t, value: Math.max(lo, Math.min(hi, Math.round(value))) });
       }
     });
 
@@ -173,7 +180,7 @@ export function generateCC11(doc: MidiDocument, opts: CC11Options): MidiDocument
     const smoothed = samples.map((s, i) => {
       const window = [samples[i - 1]?.value ?? s.value, s.value, samples[i + 1]?.value ?? s.value];
       const avg = window.reduce((a, b) => a + b, 0) / window.length;
-      return { tick: s.tick, value: clampCC(avg) };
+      return { tick: s.tick, value: Math.max(lo, Math.min(hi, clampCC(avg))) };
     });
     for (const s of smoothed) {
       track.controls.push({ tick: s.tick, controller: 11, value: s.value, channel: track.channel >= 0 ? track.channel : undefined });

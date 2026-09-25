@@ -1,11 +1,12 @@
 /** MIDI 操作调度：所有可被 AI 调用的修改操作在此定义并应用。 */
 import { Chord, parseChord, voiceChord } from './chords';
-import { clampVelocity, makeRng, gaussian } from './notes';
+import { clampCC, clampVelocity, makeRng, gaussian } from './notes';
 import {
   MidiDocument,
   MidiTrack,
   cloneDocument,
   createEmptyTrack,
+  documentEndTick,
   sortDocument,
   sortInPlace,
 } from './types';
@@ -17,7 +18,14 @@ export type MidiOperation =
   | { type: 'transpose'; semitones: number; trackIndex?: number }
   | { type: 'humanize_velocity'; trackIndex?: number; amount?: number; seed?: number }
   | { type: 'humanize_timing'; trackIndex?: number; amount?: number; seed?: number }
-  | { type: 'add_cc11'; trackIndex?: number; intensity?: number; seed?: number }
+  | { type: 'add_cc11'; trackIndex?: number; intensity?: number; seed?: number; min?: number; max?: number }
+  | {
+      type: 'set_cc_curve';
+      controller?: number; // 默认 11
+      points: { bar: number; beat?: number; value: number }[];
+      curve?: 'linear' | 'smooth' | 'step';
+      trackIndex?: number;
+    }
   | { type: 'add_sustain'; trackIndex?: number; gapBeats?: number }
   | { type: 'quantize'; trackIndex?: number; grid?: number; strength?: number }
   | { type: 'scale_velocity'; factor: number; trackIndex?: number }
@@ -86,9 +94,15 @@ function applyOne(doc: MidiDocument, op: MidiOperation): OperationResult {
     }
 
     case 'add_cc11': {
-      const out = generateCC11(doc, { trackIndex: op.trackIndex, intensity: op.intensity, seed: op.seed });
+      const out = generateCC11(doc, { trackIndex: op.trackIndex, intensity: op.intensity, seed: op.seed, min: op.min, max: op.max });
       const ccCount = out.tracks.reduce((acc, t) => acc + t.controls.filter((c) => c.controller === 11).length, 0);
-      return { doc: out, summary: `生成 CC11 表情曲线（${ccCount} 个事件）` };
+      const values = out.tracks.flatMap((t) => t.controls.filter((c) => c.controller === 11).map((c) => c.value));
+      const range = values.length ? `，值域 ${Math.min(...values)}-${Math.max(...values)}` : '';
+      return { doc: out, summary: `生成 CC11 表情曲线（${ccCount} 个事件${range}）` };
+    }
+
+    case 'set_cc_curve': {
+      return applySetCcCurve(doc, op);
     }
 
     case 'add_sustain': {
@@ -196,6 +210,87 @@ function defaultBarLenTicks(doc: MidiDocument): number {
   const sig = collectSigs(doc)[0];
   const beats = ((sig?.numerator ?? 4) * 4) / (sig?.denominator ?? 4);
   return Math.round(beats * doc.ticksPerQuarter);
+}
+
+/** 按插值方式采样 t 时刻的曲线值。points 已按 tick 升序去重。 */
+function sampleCurve(
+  points: { tick: number; value: number }[],
+  tick: number,
+  curve: 'linear' | 'smooth' | 'step',
+): number {
+  const first = points[0];
+  const last = points[points.length - 1];
+  if (tick <= first.tick) return first.value;
+  if (tick >= last.tick) return last.value;
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    if (tick >= a.tick && tick < b.tick) {
+      if (curve === 'step') return a.value;
+      const f = (tick - a.tick) / Math.max(1, b.tick - a.tick);
+      const eased = curve === 'smooth' ? (1 - Math.cos(Math.PI * f)) / 2 : f;
+      return a.value + (b.value - a.value) * eased;
+    }
+  }
+  return last.value;
+}
+
+/** 精确绘制控制器曲线：给定 {bar, beat, value} 控制点，按插值方式铺满整个文档。 */
+function applySetCcCurve(
+  doc: MidiDocument,
+  op: Extract<MidiOperation, { type: 'set_cc_curve' }>,
+): OperationResult {
+  const out = cloneDocument(doc);
+  const controller = op.controller ?? 11;
+  const tpq = doc.ticksPerQuarter;
+  const sigMap = buildSigMap(collectSigs(doc));
+
+  const pts = op.points
+    .map((p) => ({
+      tick: barToTick(Math.max(1, Math.floor(p.bar)), tpq, sigMap) + Math.round((p.beat ?? 0) * tpq),
+      value: clampCC(p.value),
+    }))
+    .sort((a, b) => a.tick - b.tick);
+  if (pts.length === 0) return { doc: out, summary: 'set_cc_curve 无控制点，已忽略' };
+  // 同 tick 去重（后者覆盖）
+  const dedup: { tick: number; value: number }[] = [];
+  for (const p of pts) {
+    if (dedup.length > 0 && dedup[dedup.length - 1].tick === p.tick) dedup[dedup.length - 1] = p;
+    else dedup.push(p);
+  }
+
+  const curve = op.curve ?? 'smooth';
+  const endTick = Math.max(documentEndTick(doc), dedup[dedup.length - 1].tick, 1);
+  const grid = Math.max(15, Math.round(tpq / 8));
+  const samples: { tick: number; value: number }[] = [];
+  for (let tick = 0; tick < endTick; tick += grid) {
+    samples.push({ tick, value: sampleCurve(dedup, tick, curve) });
+  }
+  samples.push({ tick: endTick, value: sampleCurve(dedup, endTick, curve) });
+
+  let trackCount = 0;
+  let eventCount = 0;
+  out.tracks.forEach((t, ti) => {
+    if (op.trackIndex !== undefined && ti !== op.trackIndex) return;
+    if (t.notes.length === 0) return;
+    t.controls = t.controls.filter((c) => c.controller !== controller);
+    for (const s of samples) {
+      t.controls.push({
+        tick: s.tick,
+        controller,
+        value: clampCC(s.value),
+        channel: t.channel >= 0 ? t.channel : undefined,
+      });
+      eventCount++;
+    }
+    sortInPlace(t);
+    trackCount++;
+  });
+  const range = samples.length ? `${Math.min(...samples.map((s) => s.value))}-${Math.max(...samples.map((s) => s.value))}` : '-';
+  return {
+    doc: out,
+    summary: `绘制 CC${controller} 曲线（${dedup.length} 个控制点、${curve} 插值，覆盖 ${trackCount} 条轨道 ${eventCount} 个事件，值域 ${range}）`,
+  };
 }
 
 function firstNoteTrackIndex(doc: MidiDocument): number | undefined {

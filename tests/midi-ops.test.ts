@@ -361,11 +361,139 @@ describe('操作调度 applyOperations', () => {
   });
 });
 
+describe('CC 曲线值域与精确绘制', () => {
+  function longPhraseDoc(): ReturnType<typeof pianoDoc> {
+    const doc = pianoDoc();
+    // 一个 8 小节的连续乐句（每拍一个音）
+    for (let i = 0; i < 32; i++) {
+      doc.tracks[1].notes.push({ pitch: 60 + (i % 5) * 2, velocity: 85, startTick: i * 480, endTick: i * 480 + 430 });
+    }
+    return doc;
+  }
+
+  it('add_cc11 min/max：曲线严格落在指定值域内（0-64）', () => {
+    const out = generateCC11(longPhraseDoc(), { min: 0, max: 64, seed: 9 });
+    const ccs = out.tracks[1].controls.filter((c) => c.controller === 11);
+    expect(ccs.length).toBeGreaterThan(20);
+    const values = ccs.map((c) => c.value);
+    expect(Math.min(...values)).toBeGreaterThanOrEqual(0);
+    expect(Math.max(...values)).toBeLessThanOrEqual(64);
+    // 确实用满了值域上下部（不再永远卡在高位）
+    expect(Math.min(...values)).toBeLessThanOrEqual(24);
+    expect(Math.max(...values)).toBeGreaterThanOrEqual(56);
+  });
+
+  it('add_cc11 min/max：高位区间同样可用（80-100）', () => {
+    const out = generateCC11(longPhraseDoc(), { min: 80, max: 100, seed: 9 });
+    const values = out.tracks[1].controls.filter((c) => c.controller === 11).map((c) => c.value);
+    expect(Math.min(...values)).toBeGreaterThanOrEqual(80);
+    expect(Math.max(...values)).toBeLessThanOrEqual(100);
+  });
+
+  it('applyOperations 透传 add_cc11 的 min/max', () => {
+    const { doc: out, summary } = applyOperations(longPhraseDoc(), [
+      { type: 'add_cc11', min: 0, max: 50, seed: 3 },
+    ]);
+    const values = out.tracks[1].controls.filter((c) => c.controller === 11).map((c) => c.value);
+    expect(Math.max(...values)).toBeLessThanOrEqual(50);
+    expect(summary).toContain('值域');
+  });
+
+  it('set_cc_curve linear：按控制点直线插值', () => {
+    const { doc: out, summary } = applyOperations(longPhraseDoc(), [
+      {
+        type: 'set_cc_curve',
+        curve: 'linear',
+        points: [
+          { bar: 1, value: 0 },
+          { bar: 5, value: 127 },
+        ],
+      },
+    ]);
+    const ccs = out.tracks[1].controls.filter((c) => c.controller === 11);
+    expect(ccs.length).toBeGreaterThan(20);
+    // 4/4、480tpq：第 1 小节头 = tick 0，第 5 小节头 = tick 7680；中点 tick 3840 ≈ 64
+    const atMid = ccs.filter((c) => c.tick === 3840).map((c) => c.value);
+    expect(atMid[0]).toBeGreaterThanOrEqual(62);
+    expect(atMid[0]).toBeLessThanOrEqual(65);
+    // 首点在 tick 0：起点为 0，随后沿直线缓慢上升
+    expect(ccs.filter((c) => c.tick === 0).every((c) => c.value === 0)).toBe(true);
+    expect(ccs.filter((c) => c.tick === 60).every((c) => c.value <= 5)).toBe(true);
+    // 末点（tick 7680）为 127，之后保持 127
+    expect(ccs.filter((c) => c.tick === 7680).every((c) => c.value === 127)).toBe(true);
+    expect(ccs.filter((c) => c.tick >= 7680).every((c) => c.value === 127)).toBe(true);
+    expect(summary).toContain('CC11');
+    // round-trip：写盘再读回，值 0-127 完整保留
+    const reparsed = parse(writeMidi(out));
+    const back = reparsed.tracks[1].controls.filter((c) => c.controller === 11);
+    expect(back.length).toBe(ccs.length);
+    expect(Math.min(...back.map((c) => c.value))).toBe(0);
+    expect(Math.max(...back.map((c) => c.value))).toBe(127);
+  });
+
+  it('set_cc_curve step：阶梯保持', () => {
+    const { doc: out } = applyOperations(longPhraseDoc(), [
+      {
+        type: 'set_cc_curve',
+        curve: 'step',
+        points: [
+          { bar: 1, value: 10 },
+          { bar: 3, value: 90 },
+          { bar: 5, value: 30 },
+        ],
+      },
+    ]);
+    const ccs = out.tracks[1].controls.filter((c) => c.controller === 11);
+    // 小节 1-2 区间内全部为 10，3-4 为 90，5 之后为 30
+    expect(ccs.filter((c) => c.tick >= 0 && c.tick < 2 * 1920).every((c) => c.value === 10)).toBe(true);
+    expect(ccs.filter((c) => c.tick >= 2 * 1920 && c.tick < 4 * 1920).every((c) => c.value === 90)).toBe(true);
+    expect(ccs.filter((c) => c.tick >= 4 * 1920).every((c) => c.value === 30)).toBe(true);
+  });
+
+  it('set_cc_curve smooth：平滑弧线单调且替换旧 CC11', () => {
+    const doc = longPhraseDoc();
+    doc.tracks[1].controls.push({ tick: 0, controller: 11, value: 100 });
+    const { doc: out } = applyOperations(doc, [
+      {
+        type: 'set_cc_curve',
+        curve: 'smooth',
+        points: [
+          { bar: 1, value: 20 },
+          { bar: 3, value: 90 },
+          { bar: 5, value: 20 },
+        ],
+      },
+    ]);
+    const ccs = out.tracks[1].controls.filter((c) => c.controller === 11);
+    // 旧 CC11（value=100）已被替换
+    expect(ccs.every((c) => !(c.tick === 0 && c.value === 100))).toBe(true);
+    // 上升段（1-3 小节头之间）单调不降（平滑余弦插值）
+    const rising = ccs.filter((c) => c.tick >= 0 && c.tick <= 2 * 1920).map((c) => c.value);
+    for (let i = 1; i < rising.length; i++) {
+      expect(rising[i]).toBeGreaterThanOrEqual(rising[i - 1] - 0.001);
+    }
+    // 峰值在 3 小节头附近 ≈ 90
+    const peakVals = ccs.filter((c) => c.tick === 2 * 1920).map((c) => c.value);
+    expect(peakVals[0]).toBeCloseTo(90, 0);
+  });
+
+  it('set_cc_curve 可指定控制器号（如 CC1）', () => {
+    const { doc: out } = applyOperations(longPhraseDoc(), [
+      { type: 'set_cc_curve', controller: 1, curve: 'linear', points: [{ bar: 1, value: 0 }, { bar: 3, value: 100 }] },
+    ]);
+    expect(out.tracks[1].controls.some((c) => c.controller === 1)).toBe(true);
+    expect(out.tracks[1].controls.some((c) => c.controller === 11)).toBe(false);
+  });
+});
+
 describe('统计信息', () => {
-  it('analyzeStats 汇总正确', () => {
+  it('analyzeStats 汇总正确（含 CC 值域）', () => {
     const doc = pianoDoc();
     for (let i = 0; i < 8; i++) doc.tracks[1].notes.push({ pitch: 60 + i, velocity: 70 + i, startTick: i * 480, endTick: i * 480 + 400 });
-    doc.tracks[1].controls.push({ tick: 0, controller: 11, value: 90 });
+    doc.tracks[1].controls.push(
+      { tick: 0, controller: 11, value: 90 },
+      { tick: 480, controller: 11, value: 30 },
+    );
     const stats = analyzeStats(doc);
     expect(stats.totalNotes).toBe(8);
     expect(stats.tempoBpm).toBe(120);
@@ -373,5 +501,6 @@ describe('统计信息', () => {
     expect(stats.hasSustain).toBe(false);
     expect(stats.tracks[1].maxVelocity).toBe(77);
     expect(stats.key.tonicName).toBe('C');
+    expect(stats.tracks[1].controllerValues[11]).toEqual({ min: 30, max: 90, count: 2 });
   });
 });

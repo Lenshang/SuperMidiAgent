@@ -59,8 +59,27 @@ const operationSchema: z.ZodType<MidiOperation> = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('add_cc11'),
     trackIndex: z.number().int().optional().describe('缺省作用于所有音符轨道'),
-    intensity: z.number().min(0).max(1).optional().describe('表情起伏强度 0-1，默认 0.5'),
+    intensity: z.number().min(0).max(1).optional().describe('起伏/颤动强度 0-1，默认 0.5'),
     seed: z.number().int().optional(),
+    min: z.number().int().min(0).max(127).optional().describe('曲线值域下限 0-127，默认 40；用户要求低值/弱奏时可设为 0-40'),
+    max: z.number().int().min(0).max(127).optional().describe('曲线值域上限 0-127，默认 122；曲线严格落在 [min, max] 内'),
+  }),
+  z.object({
+    type: z.literal('set_cc_curve'),
+    controller: z.number().int().min(0).max(127).optional().describe('控制器号，默认 11（表情）'),
+    points: z
+      .array(
+        z.object({
+          bar: z.number().int().min(1).describe('小节号（1 开始）'),
+          beat: z.number().min(0).max(16).optional().describe('小节内拍位置（0 = 小节头），默认 0'),
+          value: z.number().int().min(0).max(127).describe('该点的值 0-127'),
+        }),
+      )
+      .min(2)
+      .max(64)
+      .describe('控制点列表（至少 2 个），曲线覆盖整个文档：首点之前保持首点值，末点之后保持末点值'),
+    curve: z.enum(['linear', 'smooth', 'step']).optional().describe('插值：linear=直线 smooth=平滑弧线（默认） step=阶梯保持'),
+    trackIndex: z.number().int().optional().describe('缺省作用于所有音符轨道'),
   }),
   z.object({
     type: z.literal('add_sustain'),
@@ -193,7 +212,11 @@ export function createBuiltinMidiServer(store: MidiStore, getSessionId: () => st
           noteCount: t.noteCount,
           pitchRange: t.pitchRange ? `${formatPitch(t.pitchRange[0])} ~ ${formatPitch(t.pitchRange[1])}` : null,
           velocity: t.noteCount ? { min: t.minVelocity, max: t.maxVelocity, avg: t.avgVelocity } : null,
-          controllers: t.controllers,
+          controllers: Object.entries(t.controllerValues).map(([cc, v]) => ({
+            cc: Number(cc),
+            count: v.count,
+            valueRange: [v.min, v.max],
+          })),
         })),
         chordsByBar: chords.map((c) => ({ bar: c.bar, chord: c.chord })),
         notesPreview: doc.tracks
@@ -215,7 +238,8 @@ export function createBuiltinMidiServer(store: MidiStore, getSessionId: () => st
       title: '修改 MIDI',
       description:
         '对一个已有 MIDI 执行一系列修改操作，生成新的 MIDI（原版本保留）。' +
-        '常用操作：humanize_velocity（真实力度）、add_cc11（真实表情/强弱起伏）、change_chords（改变和弦进行）、' +
+        '常用操作：humanize_velocity（真实力度）、add_cc11（表情曲线，可用 min/max 指定 0-127 内任意值域）、' +
+        'set_cc_curve（精确绘制 CC 曲线：给 {bar, beat, value} 控制点 + 插值方式）、change_chords（改变和弦进行）、' +
         'transpose（移调）、quantize（量化）、add_sustain（延音踏板）、humanize_timing（微小时值偏移）、set_tempo、set_program（换音色）等。' +
         '操作按数组顺序依次执行。若尚未分析过该 MIDI，建议先调用 analyze_midi。',
       inputSchema: z.object({

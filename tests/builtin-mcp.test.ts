@@ -195,6 +195,42 @@ describe('内置 MIDI MCP 服务', () => {
     await client.close();
   });
 
+  it('modify_midi 支持 set_cc_curve 与 add_cc11 min/max', async () => {
+    const client = await makeClient(store);
+    const created = await call(client, 'create_midi', {
+      title: '曲线测试',
+      tracks: [
+        {
+          notes: Array.from({ length: 16 }, (_, i) => ({ pitch: 60 + (i % 5) * 3, start: i * 0.5, duration: 0.45, velocity: 90 })),
+        },
+      ],
+    });
+    const modified = await call(client, 'modify_midi', {
+      midiId: created.midiId,
+      operations: [
+        { type: 'set_cc_curve', curve: 'linear', points: [{ bar: 1, value: 0 }, { bar: 3, value: 110 }, { bar: 4, value: 30 }] },
+        { type: 'add_cc11', min: 0, max: 60, seed: 5 },
+      ],
+    });
+    expect(modified.ok).toBe(true);
+    const doc = store.getDoc(modified.midiId as string)!;
+    // 最终生效的是 add_cc11（后执行覆盖 set_cc_curve），值域应在 0-60
+    const ccs = doc.tracks[1].controls.filter((c) => c.controller === 11);
+    expect(ccs.length).toBeGreaterThan(0);
+    expect(Math.max(...ccs.map((c) => c.value))).toBeLessThanOrEqual(60);
+    expect(Math.min(...ccs.map((c) => c.value))).toBeGreaterThanOrEqual(0);
+    // set_cc_curve 单独验证
+    const only = await call(client, 'modify_midi', {
+      midiId: created.midiId,
+      operations: [{ type: 'set_cc_curve', curve: 'step', points: [{ bar: 1, value: 5 }, { bar: 2, value: 120 }] }],
+    });
+    const doc2 = store.getDoc(only.midiId as string)!;
+    const ccs2 = doc2.tracks[1].controls.filter((c) => c.controller === 11);
+    expect(ccs2.filter((c) => c.tick < 1920).every((c) => c.value === 5)).toBe(true);
+    expect(ccs2.filter((c) => c.tick >= 1920).every((c) => c.value === 120)).toBe(true);
+    await client.close();
+  });
+
   it('MidiStore 磁盘持久化 round-trip', async () => {
     const { mkdtemp, rm } = await import('fs/promises');
     const { tmpdir } = await import('os');
