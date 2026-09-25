@@ -121,6 +121,23 @@ npm start -- --remote-debugging-port=9222
 node scripts/gui-test.mjs
 ```
 
+## CI/CD（GitHub Actions）
+
+- **push 到 main / PR**：自动在 ubuntu + windows 上跑 密钥扫描 → 类型检查 → 单元测试 → 构建 → 打包验证（`.github/workflows/ci.yml`）
+- **推送 `v*` tag**：三平台同时构建并自动发布 GitHub Release（`.github/workflows/release.yml`）：
+  - Windows：`SuperMidiAgent Setup <版本>.exe`（NSIS 安装版）、`SuperMidiAgent-Portable-<版本>.exe`（便携版）
+  - macOS：`SuperMidiAgent-<版本>-arm64/x64-mac.dmg` 与 `.zip`（未签名，首次打开需右键 → 打开）
+  - Linux：`SuperMidiAgent-<版本>-x64/arm64-linux.AppImage` 与 `.deb`
+
+发布新版本：
+
+```bash
+npm version patch        # 或 minor / major，会自动 git tag
+git push --follow-tags   # 推送后自动构建并发布 Release
+```
+
+> 模型服务的 API Key 一律由用户在应用"设置"中自行填写，本仓库代码与发布产物中不含任何密钥（CI 内置 secret-scan 检查）。
+
 ## 常见问题
 
 - **播放没声音**：检查系统音量；播放由首次点击触发（浏览器自动播放策略）。
