@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseChord, voiceChord } from '../src/shared/midi/chords';
 import { detectChordsByBar, detectKey, analyzeStats } from '../src/shared/midi/analysis';
-import { humanizeVelocities, generateCC11, addSustainPedal, segmentPhrases, humanizeTiming } from '../src/shared/midi/humanize';
+import { humanizeVelocities, generateCcCurve, addSustainPedal, segmentPhrases, humanizeTiming } from '../src/shared/midi/humanize';
 import { applyOperations, MidiOperation } from '../src/shared/midi/ops';
 import { createEmptyDocument, createEmptyTrack } from '../src/shared/midi/types';
 import { barToTick, buildSigMap, collectSigs, docBarCount, docDurationSec, ticksToSec, buildTempoMap, collectTempos } from '../src/shared/midi/timing';
@@ -196,7 +196,7 @@ describe('CC11 表情曲线', () => {
   }
 
   it('生成事件且值域合法、平缓', () => {
-    const out = generateCC11(phraseDoc(), { intensity: 0.6, seed: 3 });
+    const out = generateCcCurve(phraseDoc(), { intensity: 0.6, seed: 3 });
     const ccs = out.tracks[1].controls.filter((c) => c.controller === 11);
     expect(ccs.length).toBeGreaterThan(20);
     expect(ccs.every((c) => c.value >= 0 && c.value <= 127)).toBe(true);
@@ -209,7 +209,7 @@ describe('CC11 表情曲线', () => {
   it('替换已有 CC11 而不是叠加', () => {
     const doc = phraseDoc();
     doc.tracks[1].controls.push({ tick: 0, controller: 11, value: 10 });
-    const out = generateCC11(doc, {});
+    const out = generateCcCurve(doc, {});
     const ccs = out.tracks[1].controls.filter((c) => c.controller === 11);
     expect(ccs.length).toBeGreaterThan(0);
     expect(ccs.every((c) => c.tick > 0 || c.value !== 10 || true)).toBe(true);
@@ -218,7 +218,7 @@ describe('CC11 表情曲线', () => {
   });
 
   it('乐句之间存在呼吸（值回落）', () => {
-    const out = generateCC11(phraseDoc(), { intensity: 0.7, seed: 5 });
+    const out = generateCcCurve(phraseDoc(), { intensity: 0.7, seed: 5 });
     const ccs = out.tracks[1].controls.filter((c) => c.controller === 11);
     const values = ccs.map((c) => c.value);
     expect(Math.max(...values) - Math.min(...values)).toBeGreaterThan(8);
@@ -275,7 +275,7 @@ describe('操作调度 applyOperations', () => {
     const ops: MidiOperation[] = [
       { type: 'transpose', semitones: 2 },
       { type: 'humanize_velocity', amount: 0.5, seed: 11 },
-      { type: 'add_cc11', intensity: 0.5, seed: 12 },
+      { type: 'auto_cc_curve', intensity: 0.5, seed: 12 },
     ];
     const { doc: out, summary } = applyOperations(doc, ops);
     expect(out.tracks[1].notes[0].pitch).toBe(62);
@@ -371,8 +371,8 @@ describe('CC 曲线值域与精确绘制', () => {
     return doc;
   }
 
-  it('add_cc11 min/max：曲线严格落在指定值域内（0-64）', () => {
-    const out = generateCC11(longPhraseDoc(), { min: 0, max: 64, seed: 9 });
+  it('auto_cc_curve min/max：曲线严格落在指定值域内（0-64）', () => {
+    const out = generateCcCurve(longPhraseDoc(), { min: 0, max: 64, seed: 9 });
     const ccs = out.tracks[1].controls.filter((c) => c.controller === 11);
     expect(ccs.length).toBeGreaterThan(20);
     const values = ccs.map((c) => c.value);
@@ -383,16 +383,16 @@ describe('CC 曲线值域与精确绘制', () => {
     expect(Math.max(...values)).toBeGreaterThanOrEqual(56);
   });
 
-  it('add_cc11 min/max：高位区间同样可用（80-100）', () => {
-    const out = generateCC11(longPhraseDoc(), { min: 80, max: 100, seed: 9 });
+  it('auto_cc_curve min/max：高位区间同样可用（80-100）', () => {
+    const out = generateCcCurve(longPhraseDoc(), { min: 80, max: 100, seed: 9 });
     const values = out.tracks[1].controls.filter((c) => c.controller === 11).map((c) => c.value);
     expect(Math.min(...values)).toBeGreaterThanOrEqual(80);
     expect(Math.max(...values)).toBeLessThanOrEqual(100);
   });
 
-  it('applyOperations 透传 add_cc11 的 min/max', () => {
+  it('applyOperations 透传 auto_cc_curve 的 min/max', () => {
     const { doc: out, summary } = applyOperations(longPhraseDoc(), [
-      { type: 'add_cc11', min: 0, max: 50, seed: 3 },
+      { type: 'auto_cc_curve', min: 0, max: 50, seed: 3 },
     ]);
     const values = out.tracks[1].controls.filter((c) => c.controller === 11).map((c) => c.value);
     expect(Math.max(...values)).toBeLessThanOrEqual(50);

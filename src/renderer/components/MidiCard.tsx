@@ -58,6 +58,21 @@ export default function MidiCard({ midiId, meta: metaProp }: Props): JSX.Element
 
   const duration = useMemo(() => (doc ? computeDur(doc) : 0), [doc]);
 
+  // 卷帘叠加显示的 CC：优先 CC11，否则选事件最多的非踏板 CC（如 CC1/CC74）
+  const ccDisplay = useMemo(() => {
+    if (!doc) return 11;
+    const count: Record<number, number> = {};
+    for (const t of doc.tracks) {
+      for (const c of t.controls) {
+        if (c.controller === 64) continue;
+        count[c.controller] = (count[c.controller] ?? 0) + 1;
+      }
+    }
+    if (count[11]) return 11;
+    const best = Object.entries(count).sort((a, b) => b[1] - a[1])[0];
+    return best ? Number(best[0]) : 11;
+  }, [doc]);
+
   const ensurePlayer = (): MidiPlayer => {
     if (!playerRef.current) {
       playerRef.current = new MidiPlayer(() => {
@@ -162,7 +177,7 @@ export default function MidiCard({ midiId, meta: metaProp }: Props): JSX.Element
 
       {doc ? (
         <div className="midi-roll-wrap" onClick={(e) => e.stopPropagation()}>
-          <PianoRoll doc={doc} durationSec={duration || 1} positionSec={playing ? position : position} />
+          <PianoRoll doc={doc} durationSec={duration || 1} positionSec={playing ? position : position} ccController={ccDisplay} />
         </div>
       ) : (
         <div className="midi-roll-loading">载入 MIDI …</div>

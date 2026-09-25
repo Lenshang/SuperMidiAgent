@@ -11,14 +11,22 @@ import {
   sortInPlace,
 } from './types';
 import { barToTick, buildSigMap, collectSigs, collectTempos, usPerQuarterOf, buildTempoMap, ticksToSec } from './timing';
-import { humanizeTiming, humanizeVelocities, generateCC11, addSustainPedal } from './humanize';
+import { humanizeTiming, humanizeVelocities, generateCcCurve, addSustainPedal } from './humanize';
 import { docBarCount } from './timing';
 
 export type MidiOperation =
   | { type: 'transpose'; semitones: number; trackIndex?: number }
   | { type: 'humanize_velocity'; trackIndex?: number; amount?: number; seed?: number }
   | { type: 'humanize_timing'; trackIndex?: number; amount?: number; seed?: number }
-  | { type: 'add_cc11'; trackIndex?: number; intensity?: number; seed?: number; min?: number; max?: number }
+  | {
+      type: 'auto_cc_curve';
+      controller?: number; // 任意 CC 控制器号，默认 11
+      trackIndex?: number;
+      intensity?: number;
+      seed?: number;
+      min?: number;
+      max?: number;
+    }
   | {
       type: 'set_cc_curve';
       controller?: number; // 默认 11
@@ -93,12 +101,13 @@ function applyOne(doc: MidiDocument, op: MidiOperation): OperationResult {
       return { doc: out, summary: `时值微偏移（强度 ${Math.round((op.amount ?? 0.3) * 100)}%）` };
     }
 
-    case 'add_cc11': {
-      const out = generateCC11(doc, { trackIndex: op.trackIndex, intensity: op.intensity, seed: op.seed, min: op.min, max: op.max });
-      const ccCount = out.tracks.reduce((acc, t) => acc + t.controls.filter((c) => c.controller === 11).length, 0);
-      const values = out.tracks.flatMap((t) => t.controls.filter((c) => c.controller === 11).map((c) => c.value));
+    case 'auto_cc_curve': {
+      const controller = op.controller ?? 11;
+      const out = generateCcCurve(doc, { controller, trackIndex: op.trackIndex, intensity: op.intensity, seed: op.seed, min: op.min, max: op.max });
+      const values = out.tracks.flatMap((t) => t.controls.filter((c) => c.controller === controller).map((c) => c.value));
       const range = values.length ? `，值域 ${Math.min(...values)}-${Math.max(...values)}` : '';
-      return { doc: out, summary: `生成 CC11 表情曲线（${ccCount} 个事件${range}）` };
+      const count = out.tracks.reduce((acc, t) => acc + t.controls.filter((c) => c.controller === controller).length, 0);
+      return { doc: out, summary: `自动生成 CC${controller} 起伏曲线（${count} 个事件${range}）` };
     }
 
     case 'set_cc_curve': {

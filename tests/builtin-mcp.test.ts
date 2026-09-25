@@ -143,7 +143,7 @@ describe('内置 MIDI MCP 服务', () => {
       title: '修改测试-人性化',
       operations: [
         { type: 'humanize_velocity', amount: 0.6, seed: 42 },
-        { type: 'add_cc11', intensity: 0.6, seed: 43 },
+        { type: 'auto_cc_curve', intensity: 0.6, seed: 43 },
         { type: 'change_chords', progression: [{ bar: 1, chord: 'Am' }, { bar: 2, chord: 'F' }], style: 'block' },
         { type: 'add_sustain' },
       ],
@@ -195,7 +195,7 @@ describe('内置 MIDI MCP 服务', () => {
     await client.close();
   });
 
-  it('modify_midi 支持 set_cc_curve 与 add_cc11 min/max', async () => {
+  it('modify_midi 支持 set_cc_curve 与 auto_cc_curve min/max', async () => {
     const client = await makeClient(store);
     const created = await call(client, 'create_midi', {
       title: '曲线测试',
@@ -209,12 +209,12 @@ describe('内置 MIDI MCP 服务', () => {
       midiId: created.midiId,
       operations: [
         { type: 'set_cc_curve', curve: 'linear', points: [{ bar: 1, value: 0 }, { bar: 3, value: 110 }, { bar: 4, value: 30 }] },
-        { type: 'add_cc11', min: 0, max: 60, seed: 5 },
+        { type: 'auto_cc_curve', min: 0, max: 60, seed: 5 },
       ],
     });
     expect(modified.ok).toBe(true);
     const doc = store.getDoc(modified.midiId as string)!;
-    // 最终生效的是 add_cc11（后执行覆盖 set_cc_curve），值域应在 0-60
+    // 最终生效的是 auto_cc_curve（后执行覆盖 set_cc_curve），值域应在 0-60
     const ccs = doc.tracks[1].controls.filter((c) => c.controller === 11);
     expect(ccs.length).toBeGreaterThan(0);
     expect(Math.max(...ccs.map((c) => c.value))).toBeLessThanOrEqual(60);

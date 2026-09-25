@@ -102,7 +102,8 @@ export function humanizeVelocities(doc: MidiDocument, opts: HumanizeVelocityOpti
   return out;
 }
 
-export interface CC11Options {
+export interface CcCurveOptions {
+  controller?: number; // 控制器号（CC11 表情 / CC1 调制 / CC2 气息 / CC74 亮度…），默认 11
   trackIndex?: number;
   intensity?: number; // 0-1，默认 0.5
   seed?: number;
@@ -112,15 +113,16 @@ export interface CC11Options {
 }
 
 /**
- * 生成 CC11（表情）曲线：
+ * 为任意 CC 控制器生成乐句起伏曲线（典型：CC11 表情、CC1 调制）：
  * - 每个乐句一条弧线：起步于值域中部偏下，45% 处达峰（接近 max），句尾回落（接近 min）；
  * - 长音（≥1 拍）内部有轻微 swell；
  * - 乐句边界轻微收束，制造呼吸感；
  * - 所有值严格落在 [min, max] 内（min 默认 40，max 默认 122，可指定 0-127 任意范围）；
  * - 采样后做滑动平均平滑。
- * 会替换轨道上已有的 CC11。
+ * 会替换轨道上已有的同名控制器事件。
  */
-export function generateCC11(doc: MidiDocument, opts: CC11Options): MidiDocument {
+export function generateCcCurve(doc: MidiDocument, opts: CcCurveOptions): MidiDocument {
+  const controller = opts.controller ?? 11;
   const intensity = Math.max(0, Math.min(1, opts.intensity ?? 0.5));
   const grid = Math.max(15, Math.round(opts.gridTicks ?? doc.ticksPerQuarter / 8));
   const lo = Math.max(0, Math.min(127, Math.round(opts.min ?? 40)));
@@ -131,7 +133,7 @@ export function generateCC11(doc: MidiDocument, opts: CC11Options): MidiDocument
     if (opts.trackIndex !== undefined && ti !== opts.trackIndex) return;
     if (track.notes.length === 0) return;
     const rng = makeRng((opts.seed ?? 24680) + ti * 104729);
-    track.controls = track.controls.filter((c) => c.controller !== 11);
+    track.controls = track.controls.filter((c) => c.controller !== controller);
 
     const phrases = segmentPhrases(track, out.ticksPerQuarter);
     const samples: { tick: number; value: number }[] = [];
@@ -183,7 +185,7 @@ export function generateCC11(doc: MidiDocument, opts: CC11Options): MidiDocument
       return { tick: s.tick, value: Math.max(lo, Math.min(hi, clampCC(avg))) };
     });
     for (const s of smoothed) {
-      track.controls.push({ tick: s.tick, controller: 11, value: s.value, channel: track.channel >= 0 ? track.channel : undefined });
+      track.controls.push({ tick: s.tick, controller, value: s.value, channel: track.channel >= 0 ? track.channel : undefined });
     }
     track.controls.sort((a, b) => a.tick - b.tick || a.controller - b.controller);
   });

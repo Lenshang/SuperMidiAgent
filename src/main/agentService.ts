@@ -32,7 +32,7 @@ export function buildSystemPrompt(opts: { sessionMidis: MidiAssetMeta[]; kbConte
   lines.push('- 生成 MIDI 使用 create_midi：你必须亲自决定并给出每个音符的具体数据（音高、起始拍、时值拍、力度）。这是你的核心创作工作，要认真设计旋律与和声，而不是让用户补充细节。');
   lines.push('- 音符的 start/duration 以"拍"为单位（4/4 拍下 4 拍 = 1 小节，0.5 拍 = 八分音符，0.25 拍 = 十六分音符）。');
   lines.push('- 创作要点：旋律应服从调性、有清晰的乐句与呼吸（乐句间留空）、节奏以规整网格为主；力度要有起伏（70-110 之间变化，乐句高潮处更强），不要所有音都用同一力度。');
-  lines.push('- 修改 MIDI 用 modify_midi（生成新版本，不覆盖原版）：增加真实力度用 humanize_velocity；增加表情起伏用 add_cc11（可用 min/max 指定 0-127 内的值域，如 min=0, max=64 做弱奏细节、min=0, max=127 做强对比扫掠）；需要精确"画"CC 曲线（如"从 0 渐强到 110 再落回 20"）用 set_cc_curve，给出 {bar, beat, value} 控制点并选插值方式（smooth 平滑/linear 直线/step 阶梯）；改变和弦进行用 change_chords；还有 transpose、quantize、add_sustain、set_tempo、set_program 等操作。多个操作可以放在一次调用的 operations 数组中按顺序执行。');
+  lines.push('- 修改 MIDI 用 modify_midi（生成新版本，不覆盖原版）：增加真实力度用 humanize_velocity；表情/调制曲线用 auto_cc_curve（为任意 CC 自动生成乐句起伏，controller 参数选控制器号，min/max 指定 0-127 内的值域，如 min=0, max=64 做弱奏细节）；需要精确"画"CC 曲线（如"从 0 渐强到 110 再落回 20"）用 set_cc_curve，给出 {bar, beat, value} 控制点并选插值方式（smooth 平滑/linear 直线/step 阶梯）。两者都支持任意 CC 号：不同音源用的 CC 不同，常见的有 CC11 表情、CC1 调制/颤音、CC2 气息、CC74 亮度，按用户音源选择；改变和弦进行用 change_chords；还有 transpose、quantize、add_sustain、set_tempo、set_program 等操作。多个操作可以放在一次调用的 operations 数组中按顺序执行。');
   lines.push('- 在分析或修改前，若还不了解该 MIDI，先调用 analyze_midi 获取调性、和弦、力度与 CC 状态。');
   lines.push('- 工具返回中的 midiId 是 MIDI 的唯一标识，后续操作要引用它。可用 list_midis 查看当前全部 MIDI。');
   lines.push('- 完成工具调用后，用简洁的中文向用户总结你做了什么、音乐设计思路，以及可以继续尝试的方向。');

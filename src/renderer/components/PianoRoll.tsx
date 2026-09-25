@@ -10,10 +10,11 @@ interface Props {
   durationSec: number;
   positionSec: number;
   height?: number;
-  showCC11?: boolean;
+  /** 叠加显示的 CC 控制器号（默认 11；无 CC11 时由 MidiCard 自动选择） */
+  ccController?: number;
 }
 
-export default function PianoRoll({ doc, durationSec, positionSec, height = 150, showCC11 = true }: Props): JSX.Element {
+export default function PianoRoll({ doc, durationSec, positionSec, height = 150, ccController = 11 }: Props): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const layout = useMemo(() => {
@@ -85,10 +86,10 @@ export default function PianoRoll({ doc, durationSec, positionSec, height = 150,
       ctx.globalAlpha = 1;
     }
 
-    // CC11 叠加
-    if (showCC11) {
+    // CC 叠加（显示指定控制器，默认 CC11）
+    {
       for (const track of doc.tracks) {
-        const ccs = track.controls.filter((c) => c.controller === 11);
+        const ccs = track.controls.filter((c) => c.controller === ccController);
         if (ccs.length < 2) continue;
         ctx.strokeStyle = 'rgba(255, 214, 102, 0.75)';
         ctx.lineWidth = 1.2;
@@ -119,7 +120,7 @@ export default function PianoRoll({ doc, durationSec, positionSec, height = 150,
       ctx.fill();
       ctx.lineWidth = 1;
     }
-  }, [doc, durationSec, positionSec, height, layout, showCC11]);
+  }, [doc, durationSec, positionSec, height, layout, ccController]);
 
   return <canvas ref={canvasRef} style={{ width: '100%', height, borderRadius: 8, display: 'block' }} data-testid="piano-roll" />;
 }

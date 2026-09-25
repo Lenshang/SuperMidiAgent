@@ -57,7 +57,8 @@ const operationSchema: z.ZodType<MidiOperation> = z.discriminatedUnion('type', [
     seed: z.number().int().optional(),
   }),
   z.object({
-    type: z.literal('add_cc11'),
+    type: z.literal('auto_cc_curve'),
+    controller: z.number().int().min(0).max(127).optional().describe('CC 控制器号，默认 11（表情）；也常用 CC1（调制/颤音）、CC2（气息）等，取决于目标音源'),
     trackIndex: z.number().int().optional().describe('缺省作用于所有音符轨道'),
     intensity: z.number().min(0).max(1).optional().describe('起伏/颤动强度 0-1，默认 0.5'),
     seed: z.number().int().optional(),
@@ -238,8 +239,8 @@ export function createBuiltinMidiServer(store: MidiStore, getSessionId: () => st
       title: '修改 MIDI',
       description:
         '对一个已有 MIDI 执行一系列修改操作，生成新的 MIDI（原版本保留）。' +
-        '常用操作：humanize_velocity（真实力度）、add_cc11（表情曲线，可用 min/max 指定 0-127 内任意值域）、' +
-        'set_cc_curve（精确绘制 CC 曲线：给 {bar, beat, value} 控制点 + 插值方式）、change_chords（改变和弦进行）、' +
+        '常用操作：humanize_velocity（真实力度）、auto_cc_curve（为任意 CC 自动生成起伏曲线，controller 可选 11 表情/1 调制等）、' +
+        'set_cc_curve（精确绘制任意 CC 曲线：给 {bar, beat, value} 控制点 + 插值方式）、change_chords（改变和弦进行）、' +
         'transpose（移调）、quantize（量化）、add_sustain（延音踏板）、humanize_timing（微小时值偏移）、set_tempo、set_program（换音色）等。' +
         '操作按数组顺序依次执行。若尚未分析过该 MIDI，建议先调用 analyze_midi。',
       inputSchema: z.object({
@@ -339,7 +340,7 @@ function parseTimeSignature(s: string): [number, number] {
 
 function buildSuggestions(stats: ReturnType<typeof analyzeStats>): string[] {
   const tips: string[] = [];
-  if (!stats.hasCC11) tips.push('尚无 CC11 表情控制器，建议 add_cc11 增加真实的强弱起伏');
+  if (!stats.hasCC11) tips.push('尚无 CC11 表情曲线，可用 auto_cc_curve（自动起伏）或 set_cc_curve（精确绘制）为 CC11/CC1 等任意 CC 画曲线');
   const velIssue = stats.tracks.some((t) => t.noteCount > 8 && t.maxVelocity - t.minVelocity < 12);
   if (velIssue) tips.push('力度过于平直（max-min < 12），建议 humanize_velocity 增加真实感');
   if (!stats.hasSustain && stats.tracks.some((t) => t.noteCount > 0)) tips.push('无延音踏板，钢琴类音色可考虑 add_sustain');

@@ -1,5 +1,5 @@
-/** WebAudio MIDI 播放器：CC11 表情 / 延音踏板 / 自定义合成器音色 / 实时音量。 */
-import { MidiDocument } from '@shared/midi/types';
+/** WebAudio MIDI 播放器：CC11 表情 / 延音踏板 / 自定义合成器音色 / 实时音量 / 演奏控制器（CC1/2/7/10/67/74）。 */
+import { MidiDocument, MidiTrack } from '@shared/midi/types';
 import { parseMidi } from '@shared/midi/parser';
 import { buildTempoMap, collectTempos, ticksToSec } from '@shared/midi/timing';
 import {
@@ -30,7 +30,7 @@ export class MidiPlayer {
   private playing = false;
   private paused = false;
   private endTimer: ReturnType<typeof setTimeout> | null = null;
-  private lfo: VibratoLfo | null = null;
+  private lfos: VibratoLfo[] = [];
   private volume = 0.85;
   onEnded: (() => void) | null = null;
 
@@ -93,44 +93,64 @@ export class MidiPlayer {
     this.playing = true;
     this.paused = false;
 
-    // 先确定各轨道音色，决定是否需要全局颤音 LFO
+    // 各轨道音色（鼓组除外）
     const trackSynths: SynthSettings[] = this.doc.tracks.map((t) => {
       if (t.channel === 9) return null as unknown as SynthSettings;
       return custom ?? timbreToSynth(timbreOf(t.program, t.channel));
     });
-    const vibUser = custom?.vibrato;
-    const vibTimbre = trackSynths
-      .filter((s): s is SynthSettings => !!s)
-      .map((s) => s.vibrato)
-      .sort((a, b) => b.depth - a.depth)[0];
-    const vib = custom
-      ? vibUser && vibUser.depth > 0
-        ? vibUser
-        : null
-      : vibTimbre && vibTimbre.depth > 0
-        ? vibTimbre
-        : null;
-    if (vib) {
-      this.lfo = createVibrato(ctx, vib.rate, vib.depth, now);
-    }
+
+    /** 把某控制器的全部事件调度到一个 AudioParam 上（线性逼近），并设置正确的初值。 */
+    const scheduleCC = (
+      track: MidiTrack,
+      controller: number,
+      param: AudioParam,
+      map: (v: number) => number,
+      defaultValue: number,
+    ): void => {
+      const events = track.controls.filter((c) => c.controller === controller).sort((a, b) => a.tick - b.tick);
+      if (events.length === 0) {
+        param.value = defaultValue;
+        return;
+      }
+      const past = events.filter((c) => ticksToSec(c.tick, tpq, tempoMap) <= fromSec);
+      param.value = past.length > 0 ? map(past[past.length - 1].value) : map(events[0].value);
+      for (const c of events) {
+        const t = now + ticksToSec(c.tick, tpq, tempoMap) - fromSec;
+        if (t <= now + 0.005) continue;
+        param.linearRampToValueAtTime(map(c.value), Math.max(now + 0.005, t));
+      }
+    };
 
     this.doc.tracks.forEach((track, trackIndex) => {
       if (track.notes.length === 0 && track.controls.length === 0) return;
       const isDrum = track.channel === 9;
 
-      // 轨道增益 + CC11 表情自动化
+      // 轨道链：notes → trackGain(CC11 表情) → ccGain(CC7 音量/CC2 气息/CC67 弱音) → panner(CC10) → tilt(CC74 亮度) → 主链
       const trackGain = ctx.createGain();
-      trackGain.gain.value = 1;
-      trackGain.connect(this.chain!.input);
+      const ccGain = ctx.createGain();
+      trackGain.connect(ccGain);
+      let panner: StereoPannerNode | null = null;
+      let tilt: BiquadFilterNode | null = null;
+      let tail: AudioNode = ccGain;
+      if (!isDrum) {
+        panner = ctx.createStereoPanner();
+        ccGain.connect(panner);
+        tilt = ctx.createBiquadFilter();
+        tilt.type = 'lowpass';
+        tilt.Q.value = 0.5;
+        panner.connect(tilt);
+        tail = tilt;
+      }
+      tail.connect(this.chain!.input);
 
-      const cc11 = track.controls.filter((c) => c.controller === 11);
-      if (cc11.length > 0) {
-        trackGain.gain.value = Math.max(0.05, cc11[0].value / 127);
-        for (const c of cc11) {
-          const t = now + ticksToSec(c.tick, tpq, tempoMap) - fromSec;
-          if (t < now - 0.01) continue;
-          trackGain.gain.linearRampToValueAtTime(Math.max(0.03, c.value / 127), Math.max(now, t));
-        }
+      // 演奏控制器自动化（线性逼近，起点前的最后一个事件作为初值）
+      scheduleCC(track, 11, trackGain.gain, (v) => Math.max(0, v / 127), 1);
+      if (panner && tilt) {
+        scheduleCC(track, 7, ccGain.gain, (v) => Math.max(0, v / 127), 1);
+        scheduleCC(track, 2, ccGain.gain, (v) => Math.max(0.05, v / 127), 1);
+        scheduleCC(track, 67, ccGain.gain, (v) => 1 - (v / 127) * 0.4, 1);
+        scheduleCC(track, 10, panner.pan, (v) => Math.max(-1, Math.min(1, (v - 64) / 63)), 0);
+        scheduleCC(track, 74, tilt.frequency, (v) => 1000 * Math.pow(16, v / 127), 16000);
       }
 
       // 延音踏板段（CC64）
@@ -153,6 +173,28 @@ export class MidiPlayer {
         return n.endTick;
       };
 
+      // 每轨颤音 LFO：音色自带深度 或 轨道上有 CC1（调制）事件时创建，CC1 实时控制深度
+      const synth = trackSynths[trackIndex];
+      let vibGain: GainNode | null = null;
+      if (!isDrum && synth) {
+        const cc1 = track.controls.filter((c) => c.controller === 1);
+        const baseDepth = synth.vibrato.depth;
+        if (baseDepth > 0 || cc1.length > 0) {
+          const lfo = createVibrato(ctx, synth.vibrato.rate || 5.5, 0, now);
+          this.lfos.push(lfo);
+          vibGain = lfo.gain;
+          vibGain.gain.value = cc1.length > 0 ? 0 : baseDepth;
+          for (const c of cc1) {
+            const t = now + ticksToSec(c.tick, tpq, tempoMap) - fromSec;
+            if (t <= now + 0.005) {
+              vibGain.gain.value = (c.value / 127) * 45;
+              continue;
+            }
+            vibGain.gain.linearRampToValueAtTime((c.value / 127) * 45, Math.max(now + 0.005, t));
+          }
+        }
+      }
+
       for (const note of track.notes) {
         const s0 = ticksToSec(note.startTick, tpq, tempoMap);
         const s1 = ticksToSec(effectiveEndTick(note), tpq, tempoMap);
@@ -161,7 +203,7 @@ export class MidiPlayer {
         const t1 = Math.max(t0 + 0.06, now + (s1 - fromSec));
         const scheduled = isDrum
           ? scheduleDrumHit(ctx, trackGain, note.pitch, note.velocity, t0)
-          : scheduleSynthNote(ctx, trackGain, trackSynths[trackIndex], note.pitch, note.velocity, t0, t1, this.lfo?.gain ?? null);
+          : scheduleSynthNote(ctx, trackGain, synth, note.pitch, note.velocity, t0, t1, vibGain);
         this.scheduled.push(scheduled);
       }
     });
@@ -211,14 +253,14 @@ export class MidiPlayer {
       }
     }
     this.scheduled = [];
-    if (this.lfo) {
+    for (const lfo of this.lfos) {
       try {
-        this.lfo.osc.stop(this.ctx!.currentTime + 0.1);
+        lfo.osc.stop(this.ctx!.currentTime + 0.1);
       } catch {
         // ignore
       }
-      this.lfo = null;
     }
+    this.lfos = [];
     this.playing = false;
     this.paused = false;
     if (this.ctx) {
