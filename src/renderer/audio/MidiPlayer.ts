@@ -33,6 +33,7 @@ export class MidiPlayer {
   private lfos: VibratoLfo[] = [];
   private bendSources: ConstantSourceNode[] = [];
   private volume = 0.85;
+  private mutedTracks = new Set<number>();
   onEnded: (() => void) | null = null;
 
   constructor(private getSynth?: () => SynthSettings | null) {}
@@ -43,6 +44,11 @@ export class MidiPlayer {
 
   get isPaused(): boolean {
     return this.paused;
+  }
+
+  /** 设置静音轨道（原文档轨道索引）；播放中调用后需重新 play 以生效。 */
+  setMutedTracks(ids: number[]): void {
+    this.mutedTracks = new Set(ids);
   }
 
   get durationSec(): number {
@@ -123,6 +129,7 @@ export class MidiPlayer {
     };
 
     this.doc.tracks.forEach((track, trackIndex) => {
+      if (this.mutedTracks.has(trackIndex)) return; // 静音轨不参与调度
       if (track.notes.length === 0 && track.controls.length === 0) return;
       const isDrum = track.channel === 9;
 

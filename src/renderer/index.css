@@ -307,6 +307,56 @@ html, body, #root {
 .midi-drag-handle { cursor: grab; }
 .midi-drag-handle:active { cursor: grabbing; }
 
+/* 分轨条 */
+.midi-tracks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 8px;
+}
+.midi-tracks-label { font-size: 12px; color: var(--text-faint); flex: none; }
+.midi-track-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--border-strong);
+  background: var(--primary-faintest);
+  border-radius: 8px;
+  padding: 2px 4px 2px 8px;
+  max-width: 100%;
+}
+.midi-track-chip .midi-track-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-strong);
+  cursor: pointer;
+  font-size: 12.5px;
+  padding: 2px 4px;
+  min-width: 0;
+}
+.midi-track-chip .track-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+.midi-track-chip .track-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+.midi-track-chip .track-count { color: var(--text-faint); font-size: 11px; }
+.midi-track-chip.muted { opacity: 0.55; }
+.midi-track-chip.muted .track-dot { background: var(--text-faint) !important; }
+.midi-track-chip.muted .track-name { text-decoration: line-through; }
+.midi-track-chip .ant-btn { color: var(--text-faint); }
+.midi-track-chip .ant-btn:hover { color: var(--text-strong) !important; }
+
 /* ============ 设置 ============ */
 
 .settings-tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseChord, voiceChord } from '../src/shared/midi/chords';
 import { detectChordsByBar, detectKey, analyzeStats } from '../src/shared/midi/analysis';
 import { humanizeVelocities, generateCcCurve, addSustainPedal, segmentPhrases, humanizeTiming } from '../src/shared/midi/humanize';
-import { applyOperations, MidiOperation } from '../src/shared/midi/ops';
+import { applyOperations, extractTracksDoc, MidiOperation } from '../src/shared/midi/ops';
 import { createEmptyDocument, createEmptyTrack } from '../src/shared/midi/types';
 import { barToTick, buildSigMap, collectSigs, docBarCount, docDurationSec, ticksToSec, buildTempoMap, collectTempos } from '../src/shared/midi/timing';
 import { writeMidi } from '../src/shared/midi/writer';
@@ -622,5 +622,44 @@ describe('Pitch Bend 绘制', () => {
     const stats = analyzeStats(doc);
     expect(stats.tracks[1].pitchBend).toEqual({ count: 2, min: 7000, max: 12000 });
     expect(stats.tracks[0].pitchBend).toBeNull();
+  });
+});
+
+describe('分轨提取', () => {
+  it('extractTracksDoc 保留速度轨与所选音轨，round-trip 一致', () => {
+    const doc = createEmptyDocument(480);
+    doc.tracks[0].tempos = [{ tick: 0, usPerQuarter: 500000 }];
+    doc.tracks[0].timeSignatures = [{ tick: 0, numerator: 4, denominator: 4 }];
+    const t1 = createEmptyTrack('Piano', 0);
+    t1.notes.push({ pitch: 60, velocity: 90, startTick: 0, endTick: 480 });
+    const t2 = createEmptyTrack('Bass', 33);
+    t2.notes.push({ pitch: 36, velocity: 80, startTick: 0, endTick: 960 });
+    const t3 = createEmptyTrack('Drum', 0);
+    t3.channel = 9;
+    t3.notes.push({ pitch: 36, velocity: 100, startTick: 0, endTick: 120 });
+    doc.tracks.push(t1, t2, t3);
+
+    const single = extractTracksDoc(doc, [2]);
+    expect(single.tracks).toHaveLength(2); // 速度轨 + Bass
+    expect(single.tracks[1].name).toBe('Bass');
+    expect(single.tracks[0].tempos[0].usPerQuarter).toBe(500000);
+    // round-trip：写出再解析，单轨内容与音色一致
+    const parsed = parse(writeMidi(single));
+    expect(parsed.tracks).toHaveLength(2);
+    expect(parsed.tracks[1].program).toBe(33);
+    expect(parsed.tracks[1].notes).toHaveLength(1);
+    expect(parsed.tracks[1].notes[0].pitch).toBe(36);
+    // 原文档不受影响
+    expect(doc.tracks).toHaveLength(4);
+
+    // 鼓组轨 channel=9 保留
+    const parsedDrum = parse(writeMidi(extractTracksDoc(doc, [3])));
+    expect(parsedDrum.tracks).toHaveLength(2);
+    expect(parsedDrum.tracks[1].channel).toBe(9);
+
+    // 越界/无效索引：无有效轨时原样返回克隆
+    expect(extractTracksDoc(doc, [7]).tracks).toHaveLength(4);
+    // 重复索引只保留一份
+    expect(extractTracksDoc(doc, [1, 1]).tracks).toHaveLength(2);
   });
 });

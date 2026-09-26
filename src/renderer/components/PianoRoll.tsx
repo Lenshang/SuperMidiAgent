@@ -3,7 +3,8 @@ import { useEffect, useMemo, useRef } from 'react';
 import { MidiDocument } from '@shared/midi/types';
 import { buildSigMap, collectSigs, collectTempos, buildTempoMap, ticksToSec, barToTick } from '@shared/midi/timing';
 
-const TRACK_COLORS = ['#7c5cff', '#00c2a8', '#ff7a59', '#f5b940', '#4aa8ff', '#e569c8', '#8fd14f', '#ff5c7a'];
+/** 轨道配色（按原文档轨道索引取色），卷帘与轨道芯片共用。 */
+export const TRACK_COLORS = ['#7c5cff', '#00c2a8', '#ff7a59', '#f5b940', '#4aa8ff', '#e569c8', '#8fd14f', '#ff5c7a'];
 
 interface Props {
   doc: MidiDocument;

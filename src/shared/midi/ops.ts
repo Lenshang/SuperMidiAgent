@@ -66,6 +66,24 @@ export interface OperationResult {
   summary: string;
 }
 
+/**
+ * 提取指定轨道生成独立文档：保留 0 号速度轨（速度/拍号）与所选音轨。
+ * trackIndexes 为原文档轨道索引；单轨文档（无独立速度轨）原样返回克隆。
+ */
+export function extractTracksDoc(doc: MidiDocument, trackIndexes: number[]): MidiDocument {
+  const out = cloneDocument(doc);
+  if (out.tracks.length < 2) return out;
+  const conductor = out.tracks[0];
+  const picked: MidiTrack[] = [];
+  for (const i of trackIndexes) {
+    const t = out.tracks[i];
+    if (t && t !== conductor && !picked.includes(t)) picked.push(t);
+  }
+  if (picked.length === 0) return out;
+  out.tracks = [conductor, ...picked];
+  return out;
+}
+
 export function applyOperations(doc: MidiDocument, operations: MidiOperation[]): OperationResult {
   let current = doc;
   const summaries: string[] = [];

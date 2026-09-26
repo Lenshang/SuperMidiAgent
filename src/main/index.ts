@@ -10,7 +10,21 @@ import { McpManager } from './mcpManager';
 import { runAgent } from './agentService';
 import { streamChat } from './openaiClient';
 import { IPC, AgentEvent, McpServerConfig, ModelProfile } from '../shared/types';
+import { extractTracksDoc } from '../shared/midi/ops';
+import { writeMidi } from '../shared/midi/writer';
 import { createDragIconPng } from './dragIcon';
+
+/** 取 MIDI 的导出字节；trackIndex 非空时导出该单轨（保留速度轨）。 */
+function exportBytesOf(id: string, trackIndex?: number): { bytes: Uint8Array; title: string } | null {
+  const found = midiStore.get(id);
+  if (!found) return null;
+  if (typeof trackIndex !== 'number') return { bytes: found.bytes, title: found.meta.title };
+  const doc = midiStore.getDoc(id);
+  if (!doc) return null;
+  const trackName = doc.tracks[trackIndex]?.name?.trim();
+  const title = `${found.meta.title}-${trackName || `Track${trackIndex}`}`;
+  return { bytes: writeMidi(extractTracksDoc(doc, [trackIndex])), title };
+}
 
 let mainWindow: BrowserWindow | null = null;
 let settings: SettingsStore;
@@ -204,23 +218,23 @@ function registerIpc(): void {
     }
     return metas;
   });
-  ipcMain.handle(IPC.midiSaveAs, async (_e, { id, suggestedName }: { id: string; suggestedName?: string }) => {
-    const found = midiStore.get(id);
-    if (!found || !mainWindow) return { ok: false, error: '找不到 MIDI 或窗口未就绪' };
+  ipcMain.handle(IPC.midiSaveAs, async (_e, { id, suggestedName, trackIndex }: { id: string; suggestedName?: string; trackIndex?: number }) => {
+    const exp = exportBytesOf(id, trackIndex);
+    if (!exp || !mainWindow) return { ok: false, error: '找不到 MIDI 或窗口未就绪' };
     const res = await dialog.showSaveDialog(mainWindow, {
       title: '保存 MIDI',
-      defaultPath: `${(suggestedName ?? found.meta.title).replace(/[\\/:*?"<>|]/g, '_')}.mid`,
+      defaultPath: `${(suggestedName ?? exp.title).replace(/[\\/:*?"<>|]/g, '_')}.mid`,
       filters: [{ name: 'MIDI 文件', extensions: ['mid'] }],
     });
     if (res.canceled || !res.filePath) return { ok: false, canceled: true };
-    await fs.writeFile(res.filePath, found.bytes);
+    await fs.writeFile(res.filePath, exp.bytes);
     return { ok: true, path: res.filePath };
   });
-  ipcMain.handle(IPC.midiQuickDownload, async (_e, { id, suggestedName }: { id: string; suggestedName?: string }) => {
-    const found = midiStore.get(id);
-    if (!found) return { ok: false, error: '找不到 MIDI' };
+  ipcMain.handle(IPC.midiQuickDownload, async (_e, { id, suggestedName, trackIndex }: { id: string; suggestedName?: string; trackIndex?: number }) => {
+    const exp = exportBytesOf(id, trackIndex);
+    if (!exp) return { ok: false, error: '找不到 MIDI' };
     const dir = app.getPath('downloads');
-    const safe = (suggestedName ?? found.meta.title).replace(/[\\/:*?"<>|]/g, '_');
+    const safe = (suggestedName ?? exp.title).replace(/[\\/:*?"<>|]/g, '_');
     const target = path.join(dir, `${safe}.mid`);
     let finalPath = target;
     let n = 1;
@@ -232,17 +246,17 @@ function registerIpc(): void {
         break;
       }
     }
-    await fs.writeFile(finalPath, found.bytes);
+    await fs.writeFile(finalPath, exp.bytes);
     return { ok: true, path: finalPath };
   });
-  ipcMain.handle(IPC.midiDrag, async (event, { id, suggestedName }: { id: string; suggestedName?: string }) => {
-    const found = midiStore.get(id);
-    if (!found || !dragIconPath) return { ok: false };
+  ipcMain.handle(IPC.midiDrag, async (event, { id, suggestedName, trackIndex }: { id: string; suggestedName?: string; trackIndex?: number }) => {
+    const exp = exportBytesOf(id, trackIndex);
+    if (!exp || !dragIconPath) return { ok: false };
     const tmpDir = path.join(app.getPath('userData'), 'tmp');
     await fs.mkdir(tmpDir, { recursive: true });
-    const safe = (suggestedName ?? found.meta.title).replace(/[\\/:*?"<>|]/g, '_');
+    const safe = (suggestedName ?? exp.title).replace(/[\\/:*?"<>|]/g, '_');
     const filePath = path.join(tmpDir, `${safe}.mid`);
-    await fs.writeFile(filePath, found.bytes);
+    await fs.writeFile(filePath, exp.bytes);
     // startDrag 会进入原生拖拽循环，先返回 IPC 结果再启动，避免阻塞渲染进程
     const sender = event.sender;
     const icon = nativeImage.createFromPath(dragIconPath);

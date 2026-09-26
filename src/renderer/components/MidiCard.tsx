@@ -1,4 +1,4 @@
-/** MIDI 卡片：钢琴卷帘 + 播放/进度 + 下载 + 拖拽导出到桌面 + 引用到输入框。 */
+/** MIDI 卡片：钢琴卷帘 + 播放/进度 + 分轨试听/下载/拖拽 + 下载 + 拖拽导出到桌面 + 引用到输入框。 */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Progress, Slider, Space, Tag, Tooltip, App } from 'antd';
 import {
@@ -8,7 +8,7 @@ import { MidiAssetMeta } from '@shared/types';
 import { MidiDocument } from '@shared/midi/types';
 import { buildTempoMap, collectTempos, ticksToSec } from '@shared/midi/timing';
 import { MidiPlayer } from '../audio/MidiPlayer';
-import PianoRoll from './PianoRoll';
+import PianoRoll, { TRACK_COLORS } from './PianoRoll';
 import { useAppStore } from '../store';
 
 interface Props {
@@ -30,6 +30,7 @@ export default function MidiCard({ midiId, meta: metaProp }: Props): JSX.Element
   const [error, setError] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const [position, setPosition] = useState(0);
+  const [muted, setMuted] = useState<Set<number>>(new Set());
   const playerRef = useRef<MidiPlayer | null>(null);
   const rafRef = useRef<number>(0);
 
@@ -44,7 +45,10 @@ export default function MidiCard({ midiId, meta: metaProp }: Props): JSX.Element
         }
         const bytes = Uint8Array.from(atob(res.base64), (c) => c.charCodeAt(0));
         const parsed = MidiPlayer.parse(bytes);
-        if (!cancelled) setDoc(parsed);
+        if (!cancelled) {
+          setDoc(parsed);
+          setMuted(new Set());
+        }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       }
@@ -55,6 +59,11 @@ export default function MidiCard({ midiId, meta: metaProp }: Props): JSX.Element
       playerRef.current = null;
     };
   }, [midiId]);
+
+  const noteTracks = useMemo(
+    () => (doc ? doc.tracks.map((t, index) => ({ track: t, index })).filter((x) => x.track.notes.length > 0) : []),
+    [doc],
+  );
 
   const duration = useMemo(() => (doc ? computeDur(doc) : 0), [doc]);
 
@@ -115,6 +124,39 @@ export default function MidiCard({ midiId, meta: metaProp }: Props): JSX.Element
   const changeVolume = (v: number): void => {
     setPlayVolume(v);
     playerRef.current?.setVolume(v);
+  };
+
+  /** 静音/取消静音某轨；播放中从当前位置重排，立即生效。 */
+  const toggleMute = (index: number): void => {
+    const next = new Set(muted);
+    if (next.has(index)) next.delete(index);
+    else next.add(index);
+    setMuted(next);
+    const player = playerRef.current;
+    if (!player) return;
+    player.setMutedTracks([...next]);
+    if (player.isPlaying || player.isPaused) {
+      const pos = player.getPosition();
+      player.stop();
+      void player.play(pos, playVolume).then(() => setPlaying(true));
+    }
+  };
+
+  const trackLabel = (index: number): string => {
+    const name = doc?.tracks[index]?.name?.trim();
+    return `${meta?.title ?? 'MIDI'}-${name || `Track${index}`}`;
+  };
+
+  const downloadTrack = async (index: number): Promise<void> => {
+    const res = (await window.api.midiQuickDownload(midiId, trackLabel(index), index)) as { ok: boolean; path?: string; error?: string };
+    if (res.ok) message.success(`已保存到 ${res.path}`);
+    else message.error(res.error ?? '下载失败');
+  };
+
+  const onTrackDragStart = (e: React.DragEvent, index: number): void => {
+    e.preventDefault();
+    e.stopPropagation();
+    void window.api.midiDrag(midiId, trackLabel(index), index);
   };
 
   useEffect(() => {
@@ -181,6 +223,45 @@ export default function MidiCard({ midiId, meta: metaProp }: Props): JSX.Element
         </div>
       ) : (
         <div className="midi-roll-loading">载入 MIDI …</div>
+      )}
+
+      {noteTracks.length > 1 && (
+        <div className="midi-tracks" data-testid="midi-tracks">
+          <span className="midi-tracks-label">分轨</span>
+          {noteTracks.map(({ track, index }) => {
+            const isMuted = muted.has(index);
+            const label = track.name?.trim() || `轨道 ${index}`;
+            return (
+              <div key={index} className={`midi-track-chip ${isMuted ? 'muted' : ''}`} data-testid={`midi-track-${index}`}>
+                <Tooltip title={isMuted ? `取消静音「${label}」` : `静音其他轨可单独试听「${label}」`}>
+                  <button
+                    className="midi-track-toggle"
+                    onClick={() => toggleMute(index)}
+                    data-testid={`midi-track-mute-${index}`}
+                    aria-pressed={isMuted}
+                  >
+                    <span className="track-dot" style={{ background: TRACK_COLORS[index % TRACK_COLORS.length] }} />
+                    <span className="track-name">{label}</span>
+                    <span className="track-count">{track.notes.length}</span>
+                  </button>
+                </Tooltip>
+                <Tooltip title={`下载「${label}」单轨 MIDI`}>
+                  <Button size="small" type="text" icon={<DownloadOutlined />} onClick={() => void downloadTrack(index)} data-testid={`midi-track-download-${index}`} />
+                </Tooltip>
+                <Tooltip title={`按住拖出「${label}」单轨 MIDI`}>
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={<DragOutlined />}
+                    draggable
+                    onDragStart={(e) => onTrackDragStart(e, index)}
+                    data-testid={`midi-track-drag-${index}`}
+                  />
+                </Tooltip>
+              </div>
+            );
+          })}
+        </div>
       )}
 
       <div className="midi-card-actions">

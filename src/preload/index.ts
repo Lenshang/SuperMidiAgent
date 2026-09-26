@@ -46,9 +46,12 @@ const api = {
   midiImportBytes: (bytes: ArrayBuffer, name: string, sessionId?: string) =>
     ipcRenderer.invoke(IPC.midiImportBytes, { bytes, name, sessionId }),
   midiImportDialog: () => ipcRenderer.invoke(IPC.midiImportDialog),
-  midiSaveAs: (id: string, suggestedName?: string) => ipcRenderer.invoke(IPC.midiSaveAs, { id, suggestedName }),
-  midiQuickDownload: (id: string, suggestedName?: string) => ipcRenderer.invoke(IPC.midiQuickDownload, { id, suggestedName }),
-  midiDrag: (id: string, suggestedName?: string) => ipcRenderer.invoke(IPC.midiDrag, { id, suggestedName }),
+  midiSaveAs: (id: string, suggestedName?: string, trackIndex?: number) =>
+    ipcRenderer.invoke(IPC.midiSaveAs, { id, suggestedName, trackIndex }),
+  midiQuickDownload: (id: string, suggestedName?: string, trackIndex?: number) =>
+    ipcRenderer.invoke(IPC.midiQuickDownload, { id, suggestedName, trackIndex }),
+  midiDrag: (id: string, suggestedName?: string, trackIndex?: number) =>
+    ipcRenderer.invoke(IPC.midiDrag, { id, suggestedName, trackIndex }),
 
   agentRun: (req: { runId: string; sessionId: string; messages: unknown[]; profileId?: string; kbEnabled: boolean }) =>
     ipcRenderer.invoke(IPC.agentRun, req),
