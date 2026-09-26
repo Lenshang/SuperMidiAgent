@@ -9,6 +9,8 @@ import {
   FolderOpenOutlined, FileAddOutlined, PlusOutlined, ReloadOutlined, StarFilled, SyncOutlined, SettingOutlined,
 } from '@ant-design/icons';
 import { KbStats, KbSource, McpServerConfig, McpServerState, ModelProfile, SettingsData } from '@shared/types';
+import { THEMES } from '../theme';
+import { useAppStore } from '../store';
 
 interface KbResult {
   title: string;
@@ -380,9 +382,35 @@ function KbTab({ kb, slot, onKb }: { kb: KbStats | null; slot: Slot; onKb: (k: K
 
 // ============ 通用 ============
 
+function ThemePicker(): JSX.Element {
+  const themeId = useAppStore((s) => s.themeId);
+  const setTheme = useAppStore((s) => s.setTheme);
+  return (
+    <div className="profile-card">
+      <div className="profile-head"><b>界面主题</b></div>
+      <div className="theme-grid">
+        {Object.values(THEMES).map((t) => (
+          <button
+            key={t.id}
+            className={`theme-swatch ${themeId === t.id ? 'active' : ''}`}
+            onClick={() => setTheme(t.id)}
+            data-testid={`theme-${t.id}`}
+            title={t.mode === 'dark' ? '暗色主题' : '亮色主题'}
+          >
+            <span className="theme-chip" style={{ background: t.chip }} />
+            <span className="theme-name">{t.label}</span>
+            {themeId === t.id && <CheckOutlined />}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function GeneralTab({ settings, reload }: { settings: SettingsData; reload: () => Promise<void> }): JSX.Element {
   return (
     <div>
+      <ThemePicker />
       <div className="profile-card">
         <div className="profile-head"><b>Agent 最大工具轮次</b></div>
         <InputNumber

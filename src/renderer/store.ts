@@ -2,6 +2,7 @@
 import { create } from 'zustand';
 import { AgentEvent, WireMessage, MidiAssetMeta } from '@shared/types';
 import { SynthSettings, DEFAULT_SYNTH } from './audio/synthEngine';
+import { DEFAULT_THEME_ID, isThemeId, ThemeId } from './theme';
 
 export interface ToolActivity {
   toolCallId: string;
@@ -44,6 +45,7 @@ interface AppState {
   synthEnabled: boolean;
   synthOpen: boolean;
   playVolume: number;
+  themeId: ThemeId;
 
   newSession: () => string;
   removeSession: (id: string) => void;
@@ -59,6 +61,7 @@ interface AppState {
   setSynthEnabled: (v: boolean) => void;
   setSynthOpen: (v: boolean) => void;
   setPlayVolume: (v: number) => void;
+  setTheme: (id: ThemeId) => void;
 
   appendUserMessage: (sessionId: string, text: string, midiIds: string[]) => void;
   applyAgentEvent: (sessionId: string, event: AgentEvent) => void;
@@ -69,6 +72,12 @@ const KB_KEY = 'supermidi.kbEnabled';
 const SYNTH_KEY = 'supermidi.synth.v1';
 const SYNTH_ENABLED_KEY = 'supermidi.synthEnabled';
 const PLAY_VOLUME_KEY = 'supermidi.playVolume';
+const THEME_KEY = 'supermidi.theme.v1';
+
+function loadThemeId(): ThemeId {
+  const v = localStorage.getItem(THEME_KEY);
+  return isThemeId(v) ? v : DEFAULT_THEME_ID;
+}
 
 function loadSynth(): SynthSettings {
   try {
@@ -210,6 +219,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   synthEnabled: localStorage.getItem(SYNTH_ENABLED_KEY) === '1',
   synthOpen: false,
   playVolume: loadPlayVolume(),
+  themeId: loadThemeId(),
 
   newSession: () => {
     const s = makeSession();
@@ -245,6 +255,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ kbEnabled: v });
   },
   setRunningRunId: (id) => set({ runningRunId: id }),
+  setTheme: (id) => {
+    localStorage.setItem(THEME_KEY, id);
+    set({ themeId: id });
+  },
   registerAssets: (assets) =>
     set((st) => {
       const next = { ...st.assets };

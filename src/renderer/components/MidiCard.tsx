@@ -192,12 +192,12 @@ export default function MidiCard({ midiId, meta: metaProp }: Props): JSX.Element
             <Button size="small" shape="circle" icon={<ReloadOutlined />} onClick={restart} />
           </Tooltip>
           <div className="midi-progress">
-            <Progress percent={duration > 0 ? Math.min(100, (position / duration) * 100) : 0} size={['100%', 4]} showInfo={false} strokeColor="#7c5cff" />
+            <Progress percent={duration > 0 ? Math.min(100, (position / duration) * 100) : 0} size={['100%', 4]} showInfo={false} strokeColor="var(--primary)" />
             <span className="midi-time">{fmt(position)} / {fmt(duration)}</span>
           </div>
           <Tooltip title="播放音量">
             <div className="midi-volume" data-testid="midi-volume">
-              <SoundOutlined style={{ color: '#8a8aa8', flexShrink: 0 }} />
+              <SoundOutlined style={{ color: 'var(--text-faint)', flexShrink: 0 }} />
               <Slider
                 min={0}
                 max={1}

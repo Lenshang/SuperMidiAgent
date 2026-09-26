@@ -1,5 +1,5 @@
-/** 应用根组件：布局 + 全局 Provider。 */
-import { useEffect } from 'react';
+/** 应用根组件：布局 + 全局 Provider + 主题应用。 */
+import { useEffect, useLayoutEffect } from 'react';
 import { App as AntdApp, ConfigProvider, theme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { XProvider } from '@ant-design/x';
@@ -7,13 +7,23 @@ import Sidebar from './components/Sidebar';
 import ChatPanel from './components/ChatPanel';
 import SettingsDrawer from './components/SettingsDrawer';
 import SynthPanel from './components/SynthPanel';
+import { applyTheme, THEMES } from './theme';
 import { initStore, useAppStore } from './store';
 
 initStore();
+// 首帧前先应用持久化的主题，避免闪一下默认配色
+applyTheme(THEMES[useAppStore.getState().themeId]);
 
 export default function App(): JSX.Element {
   const settingsOpen = useAppStore((s) => s.settingsOpen);
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
+  const themeDef = useAppStore((s) => THEMES[s.themeId]);
+  const algorithm = themeDef.mode === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm;
+
+  // 主题切换时同步 CSS 变量（useLayoutEffect 在绘制前生效，避免闪变）
+  useLayoutEffect(() => {
+    applyTheme(themeDef);
+  }, [themeDef]);
 
   // 阻止默认拖放打开文件行为
   useEffect(() => {
@@ -30,19 +40,19 @@ export default function App(): JSX.Element {
     <ConfigProvider
       locale={zhCN}
       theme={{
-        algorithm: theme.darkAlgorithm,
+        algorithm,
         token: {
-          colorPrimary: '#7c5cff',
+          colorPrimary: themeDef.primary,
           borderRadius: 8,
-          colorBgLayout: '#12121c',
-          colorBgContainer: '#1a1a28',
-          colorBgElevated: '#202032',
-          colorBorder: '#2e2e44',
-          colorBorderSecondary: '#26263a',
+          colorBgLayout: themeDef.bgLayout,
+          colorBgContainer: themeDef.bgContainer,
+          colorBgElevated: themeDef.bgElevated,
+          colorBorder: themeDef.border,
+          colorBorderSecondary: themeDef.borderSoft,
         },
       }}
     >
-      <XProvider theme={{ algorithm: theme.darkAlgorithm }}>
+      <XProvider theme={{ algorithm }}>
         <AntdApp className="app-root">
           <div className="app-layout">
             <Sidebar />

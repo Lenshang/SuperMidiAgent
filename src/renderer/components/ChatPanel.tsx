@@ -10,7 +10,7 @@ import MessageContent from './MessageContent';
 import MidiCard from './MidiCard';
 import { Avatar } from 'antd';
 
-const AI_AVATAR = <Avatar icon={<RobotOutlined />} style={{ background: 'linear-gradient(135deg,#7c5cff,#00c2a8)', flexShrink: 0 }} />;
+const AI_AVATAR = <Avatar icon={<RobotOutlined />} style={{ background: 'var(--brand-gradient)', flexShrink: 0 }} />;
 const USER_AVATAR = <Avatar icon={<UserOutlined />} style={{ background: '#2e3a59', flexShrink: 0 }} />;
 
 function genId(): string {
