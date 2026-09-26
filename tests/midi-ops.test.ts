@@ -239,6 +239,37 @@ describe('延音踏板与时值人性化', () => {
     expect(pedal[0].tick).toBeLessThanOrEqual(doc.tracks[1].notes[0].startTick);
   });
 
+  it('多小节钢琴曲按小节换踏：先抬后踩，不在曲尾才松', () => {
+    const doc = pianoDoc();
+    // 4 小节典型织体：每小节整拍和弦长音 + 逐拍旋律（旧算法会把全曲连成一组，踏板只在曲尾松开）
+    for (let bar = 0; bar < 4; bar++) {
+      const barStart = bar * 4 * 480;
+      doc.tracks[1].notes.push({ pitch: 48, velocity: 70, startTick: barStart, endTick: barStart + 1920 });
+      doc.tracks[1].notes.push({ pitch: 55, velocity: 70, startTick: barStart, endTick: barStart + 1920 });
+      for (let beat = 0; beat < 4; beat++) {
+        doc.tracks[1].notes.push({ pitch: 72, velocity: 90, startTick: barStart + beat * 480, endTick: barStart + beat * 480 + 460 });
+      }
+    }
+    const out = addSustainPedal(doc, {});
+    const pedal = out.tracks[1].controls.filter((c) => c.controller === 64).sort((a, b) => a.tick - b.tick || a.value - b.value);
+    const presses = pedal.filter((p) => p.value === 127);
+    const releases = pedal.filter((p) => p.value === 0);
+    expect(presses.length).toBe(4); // 每小节换一次踏
+    expect(releases.length).toBe(4);
+    // 事件严格交替 press → release → press …
+    pedal.forEach((p, i) => expect((p.value === 127) === (i % 2 === 0)).toBe(true));
+    // 每次抬起都严格落在前一次踩下与下一次踩下之间（先抬后踩）
+    for (let i = 1; i < pedal.length; i += 2) {
+      expect(pedal[i].tick).toBeGreaterThan(pedal[i - 1].tick);
+      if (i + 1 < pedal.length) expect(pedal[i].tick).toBeLessThan(pedal[i + 1].tick);
+    }
+    expect(pedal[0].tick).toBeLessThanOrEqual(0);
+    const lastNoteEnd = Math.max(...doc.tracks[1].notes.map((n) => n.endTick));
+    expect(pedal[pedal.length - 1].tick).toBeGreaterThanOrEqual(lastNoteEnd);
+    // 换踏抬起发生在小节线之前，而不是曲尾
+    expect(pedal[1].tick).toBeLessThan(1920);
+  });
+
   it('时值偏移幅度受限', () => {
     const doc = pianoDoc();
     for (let i = 0; i < 16; i++) {

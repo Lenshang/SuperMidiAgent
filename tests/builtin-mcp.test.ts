@@ -87,6 +87,41 @@ describe('内置 MIDI MCP 服务', () => {
     await client.close();
   });
 
+  it('create_midi 支持 operations 一次完成润饰（不产生第二个版本）', async () => {
+    const client = await makeClient(store);
+    const result = await call(client, 'create_midi', {
+      title: '创建即润饰',
+      tempo: 100,
+      tracks: [
+        {
+          name: '钢琴',
+          notes: [
+            { pitch: 48, start: 0, duration: 4, velocity: 70 },
+            { pitch: 55, start: 0, duration: 4, velocity: 70 },
+            { pitch: 60, start: 0, duration: 4, velocity: 70 },
+            { pitch: 48, start: 4, duration: 4, velocity: 70 },
+            { pitch: 55, start: 4, duration: 4, velocity: 70 },
+            { pitch: 64, start: 4, duration: 4, velocity: 70 },
+          ],
+        },
+      ],
+      operations: [{ type: 'add_sustain' }, { type: 'humanize_velocity', amount: 0.4, seed: 7 }],
+    });
+    expect(result.ok).toBe(true);
+    expect(String(result.message)).toContain('润饰');
+
+    const doc = store.getDoc(result.midiId as string)!;
+    const pedal = doc.tracks[1].controls.filter((c) => c.controller === 64);
+    const presses = pedal.filter((p) => p.value === 127);
+    // 2 小节 → 按小节换踏：两次踩下、两次抬起
+    expect(presses.length).toBe(2);
+    expect(pedal.filter((p) => p.value === 0).length).toBe(2);
+    expect(doc.tracks[1].notes.some((n) => n.velocity !== 70)).toBe(true); // 力度已人性化
+    // 只产生一份资产
+    expect(store.list('test-session')).toHaveLength(1);
+    await client.close();
+  });
+
   it('analyze_midi 输出完整分析', async () => {
     const client = await makeClient(store);
     const created = await call(client, 'create_midi', {

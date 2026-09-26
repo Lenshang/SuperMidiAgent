@@ -1,6 +1,7 @@
 /** 音乐化处理：乐句分割、力度人性化、CC11 表情曲线、延音踏板、微小时值偏移。 */
 import { clampCC, clampVelocity, gaussian, makeRng } from './notes';
 import { MidiDocument, MidiTrack, cloneDocument } from './types';
+import { barToTick, buildSigMap, collectSigs, docBarCount } from './timing';
 
 export interface Phrase {
   startTick: number;
@@ -194,42 +195,71 @@ export function generateCcCurve(doc: MidiDocument, opts: CcCurveOptions): MidiDo
 
 export interface SustainOptions {
   trackIndex?: number;
-  /** 分组间隔（拍）：前一个音结束与下一个音开始间隔小于该值视为同一踏板组 */
+  /** 同一小节内静默超过 max(gapBeats, 1) 拍时提前换踏，默认 0.25；换踏主体按小节边界进行 */
   gapBeats?: number;
 }
 
-/** 添加延音踏板（CC64）：按音符间隙分组，踏板在组首踩下、组尾（稍延后）抬起。 */
+/**
+ * 添加延音踏板（CC64）：按小节边界换踏，每次换踏先短暂抬起再踩下（贴近真实演奏的换踏动作）。
+ * 无新起音的小节沿用上一踏；同一小节内出现长静默（超过 max(gapBeats, 1) 拍）时提前换踏。
+ * 注意不能按"音符间隙"跨小节合并分组——只要曲中有长音/和弦，那样会把全曲连成一组，
+ * 导致踏板从第 0 拍踩下直到曲终才松开。
+ */
 export function addSustainPedal(doc: MidiDocument, opts: SustainOptions): MidiDocument {
-  const gapTicks = Math.round((opts.gapBeats ?? 0.25) * doc.ticksPerQuarter);
   const out = cloneDocument(doc);
+  const tpq = doc.ticksPerQuarter;
+  const tailTicks = Math.max(1, Math.round(tpq * 0.1)); // 结尾松踏的延后量
+  const repedalLead = Math.max(2, Math.round(tpq * 0.08)); // 换踏时提前抬起的量
+  const restSplitTicks = Math.max(opts.gapBeats ?? 0.25, 1) * tpq; // 同小节内断开踏板的静默阈值
+  const sigMap = buildSigMap(collectSigs(doc));
+  const barCount = docBarCount(doc);
+
+  const windows: { start: number; end: number }[] = [];
+  for (let bar = 1; bar <= barCount; bar++) {
+    windows.push({ start: barToTick(bar, tpq, sigMap), end: barToTick(bar + 1, tpq, sigMap) });
+  }
+
   out.tracks.forEach((track, ti) => {
     if (opts.trackIndex !== undefined && ti !== opts.trackIndex) return;
     if (track.notes.length === 0) return;
     track.controls = track.controls.filter((c) => c.controller !== 64);
 
     const sorted = [...track.notes].sort((a, b) => a.startTick - b.startTick);
-    const groups: { start: number; end: number }[] = [];
-    let current = { start: sorted[0].startTick, end: sorted[0].endTick };
-    for (let i = 1; i < sorted.length; i++) {
-      const n = sorted[i];
-      if (n.startTick - current.end <= gapTicks) {
-        current.end = Math.max(current.end, n.endTick);
-      } else {
-        groups.push(current);
-        current = { start: n.startTick, end: n.endTick };
-      }
-    }
-    groups.push(current);
+    const lastNoteEnd = sorted.reduce((m, n) => Math.max(m, n.endTick), 0);
+    const activeWindows = windows.filter((w) => sorted.some((n) => n.startTick >= w.start && n.startTick < w.end));
 
-    groups.forEach((g, i) => {
-      const press = Math.max(0, g.start - 1);
-      const nextStart = groups[i + 1]?.start ?? Number.MAX_SAFE_INTEGER;
-      const release = Math.min(g.end + Math.round(doc.ticksPerQuarter * 0.1), nextStart - 1);
-      track.controls.push({ tick: press, controller: 64, value: 127, channel: track.channel >= 0 ? track.channel : undefined });
-      if (release > press) {
-        track.controls.push({ tick: release, controller: 64, value: 0, channel: track.channel >= 0 ? track.channel : undefined });
+    const events: { tick: number; value: number }[] = [];
+    activeWindows.forEach((w, wi) => {
+      const inBar = sorted.filter((n) => n.startTick >= w.start && n.startTick < w.end);
+      // 小节内按静默再分段（常规织体每小节一段）
+      const segs: { start: number; end: number }[] = [];
+      let cur = { start: inBar[0].startTick, end: inBar[0].endTick };
+      for (let k = 1; k < inBar.length; k++) {
+        const n = inBar[k];
+        if (n.startTick - cur.end > restSplitTicks) {
+          segs.push(cur);
+          cur = { start: n.startTick, end: n.endTick };
+        } else {
+          cur.end = Math.max(cur.end, n.endTick);
+        }
       }
+      segs.push(cur);
+
+      segs.forEach((seg, si) => {
+        const isLast = wi === activeWindows.length - 1 && si === segs.length - 1;
+        const press = Math.max(0, seg.start);
+        const nextPressTick = si < segs.length - 1 ? segs[si + 1].start : activeWindows[wi + 1]?.start;
+        const release = isLast
+          ? lastNoteEnd + tailTicks
+          : Math.max(press + 1, (nextPressTick ?? lastNoteEnd + tailTicks) - repedalLead);
+        events.push({ tick: press, value: 127 });
+        if (release > press) events.push({ tick: release, value: 0 });
+      });
     });
+
+    for (const e of events) {
+      track.controls.push({ tick: e.tick, controller: 64, value: e.value, channel: track.channel >= 0 ? track.channel : undefined });
+    }
     track.controls.sort((a, b) => a.tick - b.tick || a.controller - b.controller);
   });
   return out;

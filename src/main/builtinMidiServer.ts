@@ -107,7 +107,7 @@ const operationSchema: z.ZodType<MidiOperation> = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('add_sustain'),
     trackIndex: z.number().int().optional(),
-    gapBeats: z.number().min(0).max(4).optional().describe('音间间隔小于该值（拍）时延音持续，默认 0.25'),
+    gapBeats: z.number().min(0).max(4).optional().describe('换踏默认按小节边界进行（先抬后踩）；同一小节内静默超过 max(该值, 1) 拍时提前换踏，默认 0.25'),
   }),
   z.object({
     type: z.literal('quantize'),
@@ -161,12 +161,18 @@ export function createBuiltinMidiServer(store: MidiStore, getSessionId: () => st
         '从明确的音符数据创建一段新的 MIDI。你必须给出每个音符的音高、起始（拍）、时值（拍）与力度。' +
         '适合：生成旋律、和弦、贝斯线、鼓点等。鼓组轨道设 isDrum=true，鼓组常用音高：36=底鼓 38=军鼓 42=闭镲 46=开镲 49=吊镲。' +
         '力度建议：旋律 70-105，伴奏 55-80；同一轨道不要全部用同一力度，应随乐句起伏。' +
+        '需要延音踏板、力度起伏、CC 曲线等润饰时，直接放进 operations 参数一次性完成，避免生成后再追加修改版本。' +
         '返回 midiId 供后续 analyze/modify 使用。节奏建议为规整网格（如 0.5 或 0.25 拍的倍数）。',
       inputSchema: z.object({
         title: z.string().optional().describe('作品标题'),
         tempo: z.number().min(20).max(300).optional().describe('速度 BPM，默认 120'),
         timeSignature: z.string().optional().describe('拍号，如 "4/4"、"3/4"、"6/8"，默认 "4/4"'),
         tracks: z.array(trackSchema).min(1).max(8).describe('轨道列表（至少 1 条）'),
+        operations: z
+          .array(operationSchema)
+          .max(12)
+          .optional()
+          .describe('创建后立即应用的操作（与 modify_midi 相同），如 add_sustain、humanize_velocity、auto_cc_curve；润饰应在此一次完成'),
       }),
     },
     async (args) => {
@@ -189,12 +195,25 @@ export function createBuiltinMidiServer(store: MidiStore, getSessionId: () => st
         doc.tracks.push(track);
       });
 
-      const meta = await store.create(doc, args.title ?? '', 'generated', { sessionId: getSessionId() });
+      let finalDoc = doc;
+      let polish = '';
+      const ops = args.operations ?? [];
+      if (ops.length > 0) {
+        try {
+          const r = applyOperations(doc, ops);
+          finalDoc = r.doc;
+          polish = `；润饰：${r.summary}`;
+        } catch (err) {
+          return textError(`操作执行失败：${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
+      const meta = await store.create(finalDoc, args.title ?? '', 'generated', { sessionId: getSessionId() });
       return {
         content: [
           {
             type: 'text' as const,
-            text: JSON.stringify({ ok: true, message: `已创建 MIDI「${meta.title}」：${meta.barCount} 小节 ${meta.noteCount} 个音符`, ...assetPayload(meta) }),
+            text: JSON.stringify({ ok: true, message: `已创建 MIDI「${meta.title}」：${meta.barCount} 小节 ${meta.noteCount} 个音符${polish}`, ...assetPayload(meta) }),
           },
         ],
       };
@@ -366,7 +385,7 @@ function buildSuggestions(stats: ReturnType<typeof analyzeStats>): string[] {
   if (!stats.hasCC11) tips.push('尚无 CC11 表情曲线，可用 auto_cc_curve（自动起伏）或 set_cc_curve（精确绘制）为 CC11/CC1 等任意 CC 画曲线');
   const velIssue = stats.tracks.some((t) => t.noteCount > 8 && t.maxVelocity - t.minVelocity < 12);
   if (velIssue) tips.push('力度过于平直（max-min < 12），建议 humanize_velocity 增加真实感');
-  if (!stats.hasSustain && stats.tracks.some((t) => t.noteCount > 0)) tips.push('无延音踏板，钢琴类音色可考虑 add_sustain');
+  if (!stats.hasSustain && stats.tracks.some((t) => t.noteCount > 0)) tips.push('暂无延音踏板（CC64）');
   if (tips.length === 0) tips.push('整体状态良好，可按需求进一步调整');
   return tips;
 }
