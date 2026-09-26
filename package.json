@@ -1,7 +1,7 @@
 {
   "name": "super-midi-agent",
   "productName": "SuperMidiAgent",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "description": "SuperMidiAgent — 基于 Electron + Ant Design X + MCP 的 AI MIDI 生成与编辑工具",
   "author": "SuperMidiAgent <supermidiagent@users.noreply.github.com>",
